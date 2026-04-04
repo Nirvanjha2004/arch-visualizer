@@ -37,7 +37,7 @@ def _build_llm(provider: str, api_key: str):
     elif provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
         return ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
+            model="gemini-2.0-flash",
             google_api_key=api_key,
             temperature=0.2,
             max_output_tokens=4096,
