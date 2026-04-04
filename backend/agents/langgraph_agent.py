@@ -38,7 +38,7 @@ def _build_llm(provider: str, api_key: str):
     elif provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
         return ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-lite",
+            model="gemini-2.0-flash",
             google_api_key=api_key,
             temperature=0.2,
             max_output_tokens=8192,
@@ -109,6 +109,8 @@ STRICT RULES — only represent what actually exists in the graph above:
 - Only create edges for import relationships that appear in the graph JSON edges list.
 - Do NOT invent nodes, layers, or connections that are not evidenced in the graph.
 - If a layer (e.g. Database) has no files in the graph, omit that layer entirely.
+- IMPORTANT: Include BOTH frontend AND backend files. Do not only show one side.
+- Pick the most significant files from each part of the codebase — entry points, services, components.
 
 Focus on:
 - Entry points and main application files (leftmost column)
@@ -197,6 +199,7 @@ STRICT RULES — only represent infrastructure that is EVIDENCED in the graph:
 - Only include a "cache" node if you see redis, memcached, or similar imports or filenames.
 - Only include a "queue" node if you see kafka, rabbitmq, celery, sqs, or similar imports or filenames.
 - Only include a "cdn" node if you see static file serving or CDN SDK imports.
+- If you see httpx, requests, aiohttp imports AND github.com in the node data or filenames → add an "external_api" node for "GitHub API" AND add an edge from the backend server to it.
 - If you see langchain, langchain_groq, langchain_google_genai, openai, anthropic, cohere imports → add an "external_api" node for the LLM provider (e.g. "Groq LLM", "Gemini API") AND add an edge from the LangGraph Agent node to this LLM node.
 - If you see langgraph imports → add a "service" node for the LangGraph Agent AND connect it: backend_server → langgraph_agent → llm_api.
 - Do NOT invent infrastructure components that have no evidence in the graph or file paths.
