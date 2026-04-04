@@ -331,6 +331,14 @@ def parse_files(file_contents: dict[str, str]) -> list[FileMetadata]:
             else:
                 imports, classes, functions, calls, ext_apis = [], [], [], [], []
 
+            # ── DEBUG: log node types seen in the tree ──────────────────────
+            import logging, os as _os
+            if _os.getenv("AST_DEBUG"):
+                _log = logging.getLogger("arch-visualizer")
+                node_types = {n.type for n in _walk(tree.root_node)}
+                _log.info("AST_DEBUG %s | node_types=%s | imports=%s",
+                          path, sorted(node_types)[:30], imports[:10])
+
             def dedup(lst: list[str]) -> list[str]:
                 seen: set[str] = set()
                 return [x for x in lst if x not in seen and not seen.add(x)]  # type: ignore
