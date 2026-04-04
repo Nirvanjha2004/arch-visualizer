@@ -162,11 +162,12 @@ def build_graph(file_metadata: list[FileMetadata]) -> dict[str, Any]:
 
     # ── Prune: remove isolated nodes ──────────────────────────────────────────
     isolated = list(nx.isolates(G))
-    # Never prune entry-point files — keep main.py, app.py, index.js etc.
-    entry_keywords = ("main", "app", "index", "server", "manage", "wsgi", "asgi")
+    # Never prune entry-point files or service/agent files — they're architecturally important
+    keep_keywords = ("main", "app", "index", "server", "manage", "wsgi", "asgi",
+                     "service", "agent", "parser", "builder", "handler", "router")
     isolated = [
         n for n in isolated
-        if not any(kw in os.path.basename(n).lower() for kw in entry_keywords)
+        if not any(kw in os.path.basename(n).lower() for kw in keep_keywords)
     ]
     G.remove_nodes_from(isolated)
 

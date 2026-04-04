@@ -549,11 +549,11 @@ def build_agent(llm_provider: str, llm_api_key: str):
         return await analyze_lld(state, llm)
 
     async def _hld(state: AgentState) -> AgentState:
-        await asyncio.sleep(4)   # avoid rapid-fire 429s between sequential calls
+        await asyncio.sleep(8)   # longer gap — Groq TPM limit needs more breathing room
         return await analyze_hld(state, llm)
 
     async def _erd(state: AgentState) -> AgentState:
-        await asyncio.sleep(4)
+        await asyncio.sleep(8)
         return await analyze_erd(state, llm)
 
     workflow.add_node("analyze_lld", _lld)
