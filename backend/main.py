@@ -42,8 +42,7 @@ LOG_LEVEL      = os.getenv("LOG_LEVEL", "INFO").upper()
 LLM_API_KEY = GROQ_API_KEY if LLM_PROVIDER == "groq" else GEMINI_API_KEY
 
 # ── Logging ────────────────────────────────────────────────────────────────────
-LOG_DIR = Path("/mnt/efs/spaces/ca014c33-7622-4744-9932-2fe631ca359d/"
-               "13310a0d-4c83-4d77-997b-8cec4d6ad9b4/logs")
+LOG_DIR = Path("logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
@@ -66,12 +65,12 @@ app = FastAPI(
 # Parse CORS origins
 _cors_raw = os.getenv(
     "BACKEND_CORS_ORIGINS",
-    '["http://localhost:5173","http://localhost:3000"]',
+    '["http://localhost:5000","http://localhost:5173","http://localhost:3000"]',
 )
 try:
     CORS_ORIGINS: list[str] = json.loads(_cors_raw)
 except Exception:
-    CORS_ORIGINS = ["http://localhost:5173", "http://localhost:3000"]
+    CORS_ORIGINS = ["http://localhost:5000", "http://localhost:5173", "http://localhost:3000"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -79,6 +78,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origin_regex=r"https://.*\.replit\.app|https://.*\.replit\.dev|https://.*\.repl\.co",
 )
 
 # ── Request / Response models ──────────────────────────────────────────────────
