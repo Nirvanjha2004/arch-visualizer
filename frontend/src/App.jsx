@@ -79,7 +79,7 @@ export default function App() {
             </h1>
             <p style={styles.heroSubtitle}>
               Paste a GitHub repository URL. We'll parse ASTs, build a dependency
-              graph, and generate a beautiful architecture diagram — automatically.
+              graph, and render an interactive architecture diagram — 100% client-side.
             </p>
 
             {/* How it works steps */}
@@ -88,7 +88,7 @@ export default function App() {
                 { n: '01', label: 'Fetch',  desc: 'GitHub API pulls all source files' },
                 { n: '02', label: 'Parse',  desc: 'Tree-sitter builds ASTs per file'  },
                 { n: '03', label: 'Graph',  desc: 'NetworkX maps the dependency graph' },
-                { n: '04', label: 'Diagram',desc: 'Eraser MCP renders the architecture' },
+                { n: '04', label: 'Diagram',desc: 'React Flow renders it client-side' },
               ].map(({ n, label, desc }) => (
                 <div key={n} style={styles.step}>
                   <span style={styles.stepNum}>{n}</span>
@@ -136,7 +136,7 @@ export default function App() {
       {/* ── Footer ──────────────────────────────────────────────────── */}
       <footer style={styles.footer}>
         <p>
-          Built with FastAPI · LangGraph · Tree-sitter · NetworkX · Eraser.io MCP
+          Built with FastAPI · LangGraph · Tree-sitter · NetworkX · React Flow
           · Groq Llama 3 70B · React + Vite
         </p>
         <p style={{ marginTop: '4px', color: 'var(--text-muted)', fontSize: '11px' }}>

@@ -6,14 +6,14 @@
 import React, { useEffect, useState } from 'react'
 
 const PIPELINE_STEPS = [
-  { label: 'Fetching repository tree from GitHub…',    icon: '📥', duration: 4000 },
-  { label: 'Generating ASTs with Tree-sitter…',         icon: '🌳', duration: 5000 },
-  { label: 'Building dependency graph with NetworkX…', icon: '🔗', duration: 4000 },
-  { label: 'Pruning graph & summarising topology…',    icon: '✂️',  duration: 3000 },
-  { label: 'LangGraph agent analysing architecture…',  icon: '🤖', duration: 5000 },
-  { label: 'Generating Eraser Diagram-as-Code…',       icon: '✍️',  duration: 4000 },
-  { label: 'Calling Eraser MCP — creating diagram…',   icon: '🎨', duration: 5000 },
-  { label: 'Finalising hosted diagram link…',          icon: '🔗', duration: 2000 },
+  { label: 'Fetching repository tree from GitHub…',        icon: '📥', duration: 4000 },
+  { label: 'Generating ASTs with Tree-sitter…',            icon: '🌳', duration: 5000 },
+  { label: 'Building dependency graph with NetworkX…',     icon: '🔗', duration: 4000 },
+  { label: 'Pruning graph & summarising topology…',        icon: '✂️',  duration: 3000 },
+  { label: 'LangGraph agent analysing architecture…',      icon: '🤖', duration: 5000 },
+  { label: 'LLM generating React Flow nodes & edges…',     icon: '✨', duration: 4000 },
+  { label: 'Validating diagram structure…',                icon: '✅', duration: 2000 },
+  { label: 'Preparing interactive diagram…',               icon: '🎨', duration: 1000 },
 ]
 
 export default function LoadingState() {

@@ -1,59 +1,68 @@
 /**
  * DiagramViewer
- * Renders the final Eraser.io hosted diagram in an iframe,
- * plus graph statistics and architecture summary.
+ * Renders the architecture diagram 100% client-side using @xyflow/react.
+ * No iframes, no external URLs — React Flow takes nodes + edges directly.
  *
  * Props:
  *   result: {
- *     diagram_url: string,
+ *     react_flow_nodes: ReactFlowNode[],
+ *     react_flow_edges: ReactFlowEdge[],
  *     arch_summary: string,
- *     dac_syntax: string,
  *     graph_stats: { files_analysed, nodes, edges, hubs, clusters },
  *     processing_time_seconds: number,
  *     warning: string,
  *   }
  *   onReset: () => void
  */
-import React, { useState } from 'react'
+import React, { useCallback } from 'react'
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  MiniMap,
+  useNodesState,
+  useEdgesState,
+  BackgroundVariant,
+} from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
 
 export default function DiagramViewer({ result, onReset }) {
-  const [showDac, setShowDac] = useState(false)
-  const [iframeFailed, setIframeFailed] = useState(false)
+  const {
+    react_flow_nodes = [],
+    react_flow_edges = [],
+    arch_summary,
+    graph_stats,
+    processing_time_seconds,
+    warning,
+  } = result
 
-  const { diagram_url, arch_summary, dac_syntax, graph_stats,
-          processing_time_seconds, warning } = result
+  // React Flow needs local state so nodes are draggable
+  const [nodes, , onNodesChange] = useNodesState(react_flow_nodes)
+  const [edges, , onEdgesChange] = useEdgesState(react_flow_edges)
 
   return (
     <div style={styles.container}>
-      {/* ── Header row ─────────────────────────────────────────────── */}
+      {/* ── Header ─────────────────────────────────────────────────── */}
       <div style={styles.header}>
         <div>
           <h2 style={styles.title}>Architecture Diagram</h2>
           <p style={styles.subtitle}>
             Analysed in {processing_time_seconds}s ·{' '}
             {graph_stats.files_analysed} files ·{' '}
-            {graph_stats.nodes} nodes · {graph_stats.edges} edges
+            {nodes.length} nodes · {edges.length} edges
           </p>
         </div>
-        <div style={styles.headerActions}>
-          <a href={diagram_url} target="_blank" rel="noreferrer"
-            style={styles.openBtn}>
-            Open in Eraser ↗
-          </a>
-          <button onClick={onReset} style={styles.resetBtn}>
-            ← New Analysis
-          </button>
-        </div>
+        <button onClick={onReset} style={styles.resetBtn}>
+          ← New Analysis
+        </button>
       </div>
 
-      {/* ── Warning banner (non-fatal errors) ─────────────────────── */}
+      {/* ── Warning banner ─────────────────────────────────────────── */}
       {warning && (
-        <div style={styles.warning} role="alert">
-          ⚠️ {warning}
-        </div>
+        <div style={styles.warning} role="alert">⚠️ {warning}</div>
       )}
 
-      {/* ── Architecture summary ───────────────────────────────────── */}
+      {/* ── AI summary ─────────────────────────────────────────────── */}
       {arch_summary && (
         <div style={styles.summaryCard}>
           <h3 style={styles.sectionTitle}>🤖 AI Architecture Summary</h3>
@@ -61,7 +70,7 @@ export default function DiagramViewer({ result, onReset }) {
         </div>
       )}
 
-      {/* ── Stats row ──────────────────────────────────────────────── */}
+      {/* ── Stats chips ────────────────────────────────────────────── */}
       <div style={styles.statsRow}>
         <StatChip label="Files Analysed" value={graph_stats.files_analysed} icon="📄" />
         <StatChip label="Graph Nodes"    value={graph_stats.nodes}           icon="🔵" />
@@ -69,54 +78,53 @@ export default function DiagramViewer({ result, onReset }) {
         <StatChip label="Clusters"       value={graph_stats.clusters?.length ?? 0} icon="📦" />
       </div>
 
-      {/* ── Hubs ───────────────────────────────────────────────────── */}
+      {/* ── Core hubs ──────────────────────────────────────────────── */}
       {graph_stats.hubs?.length > 0 && (
         <div style={styles.hubsCard}>
-          <span style={styles.hubsLabel}>Core Hubs (most depended-upon):</span>
+          <span style={styles.hubsLabel}>Core Hubs:</span>
           {graph_stats.hubs.map((h) => (
             <code key={h} style={styles.hubChip}>{h}</code>
           ))}
         </div>
       )}
 
-      {/* ── Eraser diagram iframe ──────────────────────────────────── */}
-      <div style={styles.iframeCard}>
-        <h3 style={styles.sectionTitle}>🎨 Visual Architecture Diagram</h3>
-        {iframeFailed ? (
-          <div style={styles.iframeFallback}>
-            <p style={{ color: 'var(--text-secondary)', marginBottom: '12px' }}>
-              The diagram cannot be embedded directly. Click the button below
-              to view it on Eraser.io.
-            </p>
-            <a href={diagram_url} target="_blank" rel="noreferrer"
-              style={styles.openBtn}>
-              View Diagram on Eraser.io ↗
-            </a>
-          </div>
-        ) : (
-          <iframe
-            src={diagram_url}
-            title="Architecture Diagram"
-            style={styles.iframe}
-            onError={() => setIframeFailed(true)}
-            allow="fullscreen"
-            sandbox="allow-same-origin allow-scripts allow-popups"
+      {/* ── React Flow canvas ──────────────────────────────────────── */}
+      <div style={styles.flowWrapper}>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          fitView
+          fitViewOptions={{ padding: 0.2 }}
+          attributionPosition="bottom-right"
+          style={styles.flow}
+          nodesDraggable
+          nodesConnectable={false}
+          elementsSelectable
+        >
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={16}
+            size={1}
+            color="#2a3347"
           />
-        )}
+          <Controls
+            style={styles.controls}
+            showInteractive={false}
+          />
+          <MiniMap
+            style={styles.minimap}
+            nodeColor="#4f6ef7"
+            maskColor="rgba(13,15,20,0.7)"
+          />
+        </ReactFlow>
       </div>
 
-      {/* ── DaC toggle ─────────────────────────────────────────────── */}
-      <div style={styles.dacSection}>
-        <button
-          style={styles.dacToggle}
-          onClick={() => setShowDac((v) => !v)}
-        >
-          {showDac ? '▲ Hide' : '▼ Show'} Eraser Diagram-as-Code
-        </button>
-        {showDac && dac_syntax && (
-          <pre style={styles.dacCode}>{dac_syntax}</pre>
-        )}
-      </div>
+      {/* ── Hint ───────────────────────────────────────────────────── */}
+      <p style={styles.hint}>
+        💡 Drag nodes to rearrange · Scroll to zoom · Drag background to pan
+      </p>
     </div>
   )
 }
@@ -143,16 +151,6 @@ const styles = {
   },
   title: { fontSize: '22px', fontWeight: 700, color: 'var(--text-primary)' },
   subtitle: { color: 'var(--text-secondary)', fontSize: '13px', marginTop: '4px' },
-  headerActions: { display: 'flex', gap: '12px', flexWrap: 'wrap' },
-  openBtn: {
-    padding: '10px 20px',
-    background: 'var(--accent)',
-    color: '#fff',
-    borderRadius: 'var(--radius-sm)',
-    textDecoration: 'none',
-    fontSize: '14px', fontWeight: 600,
-    display: 'inline-block',
-  },
   resetBtn: {
     padding: '10px 20px',
     background: 'var(--bg-input)',
@@ -181,9 +179,7 @@ const styles = {
     color: 'var(--text-primary)', marginBottom: '10px',
   },
   summaryText: { color: 'var(--text-secondary)', fontSize: '14px', lineHeight: 1.7 },
-  statsRow: {
-    display: 'flex', gap: '12px', flexWrap: 'wrap',
-  },
+  statsRow: { display: 'flex', gap: '12px', flexWrap: 'wrap' },
   statChip: {
     flex: '1 1 120px',
     display: 'flex', alignItems: 'center', gap: '12px',
@@ -212,40 +208,29 @@ const styles = {
     fontSize: '12px',
     fontFamily: 'var(--font-mono)',
   },
-  iframeCard: {
-    padding: '20px',
-    background: 'var(--bg-input)',
+  /* React Flow canvas */
+  flowWrapper: {
+    height: '560px',
     border: '1px solid var(--border)',
     borderRadius: 'var(--radius)',
+    overflow: 'hidden',
+    background: '#0d0f14',
   },
-  iframe: {
-    width: '100%', height: '540px',
-    border: 'none',
-    borderRadius: 'var(--radius-sm)',
-    background: '#fff',
-  },
-  iframeFallback: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
-    padding: '40px', textAlign: 'center',
-  },
-  dacSection: { display: 'flex', flexDirection: 'column', gap: '8px' },
-  dacToggle: {
-    alignSelf: 'flex-start',
-    background: 'none', border: 'none',
-    color: 'var(--text-secondary)',
-    fontSize: '13px', cursor: 'pointer',
-    padding: '4px 0',
-  },
-  dacCode: {
-    padding: '16px',
-    background: 'var(--bg-input)',
+  flow: { width: '100%', height: '100%' },
+  controls: {
+    background: 'var(--bg-card)',
     border: '1px solid var(--border)',
     borderRadius: 'var(--radius-sm)',
-    color: 'var(--text-secondary)',
+  },
+  minimap: {
+    background: 'var(--bg-card)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-sm)',
+  },
+  hint: {
+    textAlign: 'center',
+    color: 'var(--text-muted)',
     fontSize: '12px',
-    fontFamily: 'var(--font-mono)',
-    overflowX: 'auto',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
+    marginTop: '-8px',
   },
 }

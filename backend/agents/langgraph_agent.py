@@ -1,44 +1,44 @@
 """
-LangGraph Agent — Steps 7–12 of the pipeline.
+LangGraph Agent — Steps 7-10 of the pipeline (React Flow edition).
 
 State machine:
-  ┌──────────────────────┐      ┌────────────────────────┐
-  │  analyze_architecture│ ──►  │  create_eraser_diagram  │ ──► END
-  └──────────────────────┘      └────────────────────────┘
+  ┌──────────────────────┐
+  │  analyze_architecture│ ──► END
+  └──────────────────────┘
 
-Step 1 — analyze_architecture:
-  The LLM receives the compressed Graph JSON and produces:
-    a) A prose summary of the detected architectural patterns.
-    b) A STRICTLY VALID Eraser.io Diagram-as-Code (DaC) string.
+The single LLM node receives the compressed NetworkX Graph JSON and outputs
+a React Flow-compatible JSON payload:
 
-Step 2 — create_eraser_diagram:
-  The agent acts as an MCP Client, spawning the official
-  @eraser-io/mcp-server Node.js process via stdio and calling its
-  tool to turn the DaC into a hosted diagram URL.
+  {
+    "summary": "prose description of architectural patterns",
+    "nodes": [
+      { "id": "unique_id", "data": { "label": "Display Name" }, "position": { "x": 0, "y": 0 } },
+      ...
+    ],
+    "edges": [
+      { "id": "e_src_tgt", "source": "src_id", "target": "tgt_id", "animated": true },
+      ...
+    ]
+  }
 
-Returns the final diagram URL (or a fallback Eraser preview URL).
+The FastAPI layer returns this directly to the React frontend, which renders
+it 100% client-side using @xyflow/react — no external services required.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import os
 import re
 from typing import Any, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 
-# MCP client imports
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-
 
 # ── LLM factory ───────────────────────────────────────────────────────────────
 
 def _build_llm(provider: str, api_key: str):
-    """Return a LangChain chat model based on the chosen provider."""
+    """Return a LangChain chat model based on the configured provider."""
     if provider == "groq":
         from langchain_groq import ChatGroq
         return ChatGroq(
@@ -59,89 +59,146 @@ def _build_llm(provider: str, api_key: str):
         raise ValueError(f"Unsupported LLM provider: {provider}")
 
 
-# ── Eraser DaC prompt templates ───────────────────────────────────────────────
+# ── Prompts ───────────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are an expert software architect specialising in codebase analysis
-and visual diagramming. Your task is to analyse a dependency graph JSON and produce:
+SYSTEM_PROMPT = """You are an expert software architect specialising in codebase analysis.
+Your task is to analyse a dependency graph JSON extracted from a GitHub repository and
+produce a React Flow diagram JSON that visually represents the architecture.
 
-1. A short prose summary (3-5 sentences) of the detected architectural patterns.
-2. A STRICTLY VALID Eraser.io Diagram-as-Code (DaC) architecture diagram.
+## Output Requirements (STRICT — return ONLY valid JSON, no markdown fences):
 
-## Eraser.io DaC Syntax Rules (follow EXACTLY):
-- Use `direction: right` or `direction: down` at the top.
-- Declare nodes using:  NodeId [label: "Display Name", icon: icon-name]
-  Valid icons: aws-lambda, aws-rds, aws-s3, aws-ec2, postgresql, mysql, mongodb,
-  redis, docker, kubernetes, react, nextjs, nodejs, python, fastapi, django,
-  flask, express, nginx, cloudflare, github, vercel, firebase, supabase,
-  microservice, api, database, cache, queue, browser, server, cloud
-- Declare edges using:  Source > Target : "label"  (label is optional)
-- Group nodes in clusters using:  GroupName { ... }
-- DO NOT use Mermaid syntax. DO NOT use arrows like -→ or ──►.
-- Cluster names and node IDs must NOT contain spaces (use underscores).
-- Max ~20 nodes to keep the diagram readable.
-
-## Output format (return ONLY this JSON, no extra text):
 {
-  "summary": "...",
-  "dac": "direction: right\\n\\n..."
+  "summary": "3-5 sentence prose description of the detected architectural patterns.",
+  "nodes": [
+    {
+      "id": "unique_snake_case_id",
+      "data": { "label": "Human-Readable Name" },
+      "position": { "x": <integer>, "y": <integer> }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_<source_id>_<target_id>",
+      "source": "<source node id>",
+      "target": "<target node id>",
+      "animated": true
+    }
+  ]
 }
+
+## Node & Layout Rules:
+- Use a maximum of 20 nodes — pick the most architecturally significant files/modules.
+- Group nodes into logical COLUMNS by layer (left-to-right: entry → controllers → services → data):
+    Column 0 (x=50):   Entry points / main files
+    Column 1 (x=300):  Routes / Controllers / Handlers
+    Column 2 (x=550):  Services / Business logic
+    Column 3 (x=800):  Models / Schemas / Repositories
+    Column 4 (x=1050): Database / Cache / External integrations
+    Column 5 (x=1300): Utilities / Config / Shared
+- Space nodes VERTICALLY: y = row_index * 120 within each column. Start at y=50.
+- Node `id` must be a short, unique snake_case string (e.g., "app_main", "user_controller").
+- Node `label` must be a concise human-readable name (e.g., "App Entry", "User Controller").
+
+## Edge Rules:
+- Only include edges between nodes that ARE in your node list.
+- `source` and `target` must exactly match node `id` values.
+- Set `animated: true` on every edge.
+
+## CRITICAL:
+- Return ONLY the raw JSON object — no explanation, no code fences, no extra text.
+- Every node id referenced in edges MUST exist in the nodes array.
 """
 
 USER_PROMPT_TEMPLATE = """Analyse the following dependency graph extracted from a GitHub repository.
-Identify the architectural patterns, layers, and key dependencies, then generate the Eraser DaC.
+Identify the architectural layers and key dependencies, then produce the React Flow JSON.
 
 Graph JSON:
 {graph_json}
 
 Focus on:
-- Entry points and main application files
-- Database / persistence layer
-- API / controller layer
+- Entry points and main application files (leftmost column)
+- API routes / controllers
 - Service / business logic layer
-- External API integrations
-- Utility / shared modules
+- Data models and repositories
+- Database / cache integrations (rightmost column)
+- Utilities and config (rightmost column)
 
-Group related files into logical clusters in the diagram.
+Assign clear, descriptive labels. Ensure no two nodes share the same x,y position.
 """
 
 
-# ── Graph State ────────────────────────────────────────────────────────────────
+# ── Agent State ────────────────────────────────────────────────────────────────
 
 class AgentState(TypedDict):
-    graph_json: dict[str, Any]       # Input: compressed graph topology
-    dac_syntax: str                  # Intermediate: Eraser DaC string
-    arch_summary: str                # Intermediate: prose description
-    diagram_url: str                 # Output: hosted Eraser URL
-    error: str                       # Error message if any step fails
+    graph_json: dict[str, Any]        # Input: NetworkX graph topology
+    react_flow_nodes: list[dict]      # Output: React Flow nodes array
+    react_flow_edges: list[dict]      # Output: React Flow edges array
+    arch_summary: str                 # Output: prose architecture description
+    error: str                        # Non-empty if anything went wrong
 
 
-# ── Node 1: Analyse architecture & generate DaC ───────────────────────────────
+# ── Graph compression ─────────────────────────────────────────────────────────
 
 def _compress_graph(graph_json: dict) -> str:
     """
-    Compress graph JSON to stay within LLM context window.
-    Keeps essential structural info, drops verbose call lists.
+    Trim the graph to stay within LLM context limits.
+    Keeps top 20 nodes by in-degree and the first 40 edges.
     """
     compressed = {
-        "node_count": graph_json.get("node_count"),
-        "edge_count": graph_json.get("edge_count"),
-        "hubs": graph_json.get("hubs", []),
+        "node_count":   graph_json.get("node_count"),
+        "edge_count":   graph_json.get("edge_count"),
+        "hubs":         graph_json.get("hubs", []),
         "entry_points": graph_json.get("entry_points", []),
-        "clusters": graph_json.get("clusters", {}),
-        # Only top-20 nodes by in_degree
+        "clusters":     graph_json.get("clusters", {}),
         "nodes": sorted(
             graph_json.get("nodes", []),
             key=lambda n: n.get("in_degree", 0),
             reverse=True,
         )[:20],
-        # Only first 40 edges
         "edges": graph_json.get("edges", [])[:40],
     }
     return json.dumps(compressed, indent=2)
 
 
+# ── LLM validation helpers ────────────────────────────────────────────────────
+
+def _validate_and_fix(parsed: dict) -> dict:
+    """
+    Ensure nodes and edges are structurally valid.
+    Removes edges whose source/target don't exist in the node list.
+    """
+    nodes = parsed.get("nodes", [])
+    edges = parsed.get("edges", [])
+
+    valid_ids = {n["id"] for n in nodes if "id" in n}
+
+    # Fix missing position fields
+    for i, node in enumerate(nodes):
+        if "position" not in node:
+            node["position"] = {"x": (i % 6) * 250 + 50, "y": (i // 6) * 120 + 50}
+        if "data" not in node:
+            node["data"] = {"label": node.get("id", f"node_{i}")}
+
+    # Drop edges referencing unknown node IDs; ensure animated=true
+    clean_edges = []
+    for edge in edges:
+        if edge.get("source") in valid_ids and edge.get("target") in valid_ids:
+            edge["animated"] = True
+            if "id" not in edge:
+                edge["id"] = f"e_{edge['source']}_{edge['target']}"
+            clean_edges.append(edge)
+
+    parsed["nodes"] = nodes
+    parsed["edges"] = clean_edges
+    return parsed
+
+
+# ── Node: analyse architecture ────────────────────────────────────────────────
+
 async def analyze_architecture(state: AgentState, llm) -> AgentState:
-    """LLM step: analyse graph JSON → generate DaC + summary."""
+    """
+    Single LLM step: compress graph JSON → call LLM → parse React Flow JSON.
+    """
     try:
         compressed = _compress_graph(state["graph_json"])
         messages = [
@@ -151,156 +208,56 @@ async def analyze_architecture(state: AgentState, llm) -> AgentState:
             ),
         ]
         response = await llm.ainvoke(messages)
-        raw_content: str = response.content
+        raw: str = response.content
 
-        # Extract JSON from the LLM response (may have markdown code fences)
-        json_match = re.search(r"\{[\s\S]*\}", raw_content)
+        # Strip markdown code fences if the LLM wraps output
+        raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
+        raw = re.sub(r"```\s*$", "", raw.strip(), flags=re.MULTILINE)
+
+        # Extract the outermost JSON object
+        json_match = re.search(r"\{[\s\S]*\}", raw)
         if not json_match:
-            raise ValueError("LLM did not return valid JSON")
+            raise ValueError("LLM response did not contain a JSON object")
 
         parsed = json.loads(json_match.group())
+        parsed = _validate_and_fix(parsed)
+
         return {
             **state,
-            "dac_syntax": parsed.get("dac", ""),
-            "arch_summary": parsed.get("summary", ""),
-            "error": "",
+            "react_flow_nodes": parsed.get("nodes", []),
+            "react_flow_edges": parsed.get("edges", []),
+            "arch_summary":     parsed.get("summary", ""),
+            "error":            "",
         }
     except Exception as exc:
-        return {**state, "error": f"LLM analysis failed: {exc}"}
-
-
-# ── Node 2: Call Eraser MCP to generate diagram ───────────────────────────────
-
-async def create_eraser_diagram(state: AgentState, eraser_api_key: str) -> AgentState:
-    """
-    MCP Client step: spawn the official @eraser-io/mcp-server via stdio,
-    list its tools, call the diagram generation tool, and return the URL.
-    """
-    if state.get("error"):
-        return state  # propagate error without attempting MCP call
-
-    dac = state.get("dac_syntax", "")
-    if not dac:
-        return {**state, "error": "No DaC syntax generated by LLM"}
-
-    try:
-        # Spawn the Eraser MCP server as a subprocess via stdio transport
-        server_params = StdioServerParameters(
-            command="npx",
-            args=["-y", "@eraser-io/mcp@latest"],
-            env={
-                **os.environ,
-                "ERASER_API_KEY": eraser_api_key,
-            },
-        )
-
-        diagram_url = ""
-        async with stdio_client(server_params) as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as session:
-                # Initialise the MCP session
-                await session.initialize()
-
-                # List available tools to find the correct tool name
-                tools_response = await session.list_tools()
-                available_tools = [t.name for t in tools_response.tools]
-
-                # Determine which tool to call
-                # Eraser MCP exposes: "generate-diagram-as-code" or similar
-                tool_name = None
-                for candidate in (
-                    "generateDiagram",
-                    "generate-diagram",
-                    "generate_diagram",
-                    "createDiagram",
-                    "create-diagram",
-                    "renderDiagram",
-                ):
-                    if candidate in available_tools:
-                        tool_name = candidate
-                        break
-
-                if tool_name is None and available_tools:
-                    # Fallback: use the first available tool
-                    tool_name = available_tools[0]
-
-                if tool_name is None:
-                    raise RuntimeError(
-                        "No diagram generation tool found in Eraser MCP server. "
-                        f"Available: {available_tools}"
-                    )
-
-                # Call the Eraser MCP tool
-                result = await session.call_tool(
-                    tool_name,
-                    {
-                        "text": dac,           # primary field Eraser uses
-                        "diagramType": "cloud-architecture",
-                    },
-                )
-
-                # Extract the URL from the result content
-                if result.content:
-                    for content_item in result.content:
-                        text = getattr(content_item, "text", "") or str(content_item)
-                        # Look for a URL in the response
-                        url_match = re.search(
-                            r"https?://[^\s\"'<>]+eraser[^\s\"'<>]+", text
-                        )
-                        if url_match:
-                            diagram_url = url_match.group()
-                            break
-                        # Sometimes the whole text IS the URL
-                        if text.startswith("http"):
-                            diagram_url = text.strip()
-                            break
-
-        if not diagram_url:
-            # Fallback: provide a direct Eraser preview link with encoded DaC
-            import urllib.parse
-            encoded = urllib.parse.quote(dac)
-            diagram_url = f"https://app.eraser.io/workspace/new?content={encoded[:2000]}"
-
-        return {**state, "diagram_url": diagram_url, "error": ""}
-
-    except Exception as exc:
-        # Return a graceful fallback instead of crashing
-        import urllib.parse
-        fallback = f"https://app.eraser.io/workspace/new"
         return {
             **state,
-            "diagram_url": fallback,
-            "error": f"Eraser MCP call failed: {exc}. Fallback URL provided.",
+            "react_flow_nodes": [],
+            "react_flow_edges": [],
+            "error": f"LLM analysis failed: {exc}",
         }
 
 
-# ── Graph assembly ─────────────────────────────────────────────────────────────
+# ── Graph assembly ────────────────────────────────────────────────────────────
 
-def build_agent(llm_provider: str, llm_api_key: str, eraser_api_key: str):
+def build_agent(llm_provider: str, llm_api_key: str):
     """
-    Construct and compile the LangGraph state machine.
+    Compile the single-node LangGraph state machine.
 
-    Returns a compiled graph (app) that can be invoked with:
-        result = await app.ainvoke({"graph_json": {...}, "dac_syntax": "", ...})
+    Usage:
+        app = build_agent("groq", "gsk_...")
+        result = await app.ainvoke(initial_state)
     """
     llm = _build_llm(llm_provider, llm_api_key)
 
     workflow = StateGraph(AgentState)
 
-    # Bind parameters into node functions
     async def _analyze(state: AgentState) -> AgentState:
         return await analyze_architecture(state, llm)
 
-    async def _create_diagram(state: AgentState) -> AgentState:
-        return await create_eraser_diagram(state, eraser_api_key)
-
-    # Register nodes
     workflow.add_node("analyze_architecture", _analyze)
-    workflow.add_node("create_eraser_diagram", _create_diagram)
-
-    # Define edges
     workflow.set_entry_point("analyze_architecture")
-    workflow.add_edge("analyze_architecture", "create_eraser_diagram")
-    workflow.add_edge("create_eraser_diagram", END)
+    workflow.add_edge("analyze_architecture", END)
 
     return workflow.compile()
 
@@ -311,33 +268,32 @@ async def run_agent(
     graph_json: dict[str, Any],
     llm_provider: str,
     llm_api_key: str,
-    eraser_api_key: str,
 ) -> dict[str, Any]:
     """
-    End-to-end entry point.
+    End-to-end entry point — call from FastAPI.
 
-    Accepts the graph topology dict and returns:
+    Returns:
       {
-        "diagram_url": "https://...",
+        "react_flow_nodes": [...],
+        "react_flow_edges": [...],
         "arch_summary": "...",
-        "dac_syntax": "...",
         "error": ""
       }
     """
-    app = build_agent(llm_provider, llm_api_key, eraser_api_key)
+    app = build_agent(llm_provider, llm_api_key)
 
     initial_state: AgentState = {
-        "graph_json": graph_json,
-        "dac_syntax": "",
-        "arch_summary": "",
-        "diagram_url": "",
-        "error": "",
+        "graph_json":       graph_json,
+        "react_flow_nodes": [],
+        "react_flow_edges": [],
+        "arch_summary":     "",
+        "error":            "",
     }
 
     result = await app.ainvoke(initial_state)
     return {
-        "diagram_url": result.get("diagram_url", ""),
-        "arch_summary": result.get("arch_summary", ""),
-        "dac_syntax": result.get("dac_syntax", ""),
-        "error": result.get("error", ""),
+        "react_flow_nodes": result.get("react_flow_nodes", []),
+        "react_flow_edges": result.get("react_flow_edges", []),
+        "arch_summary":     result.get("arch_summary", ""),
+        "error":            result.get("error", ""),
     }

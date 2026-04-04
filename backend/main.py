@@ -5,17 +5,15 @@ Endpoints:
   POST /api/analyze   — main pipeline entry point
   GET  /api/health    — health check
 
-Full 12-step pipeline:
-  1.  Receive GitHub URL from client
-  2.  Fetch repo tree via GitHub API (PAT-authenticated)
-  3.  Parse each source file with Tree-sitter → ASTs
-  4.  Extract structural metadata (imports, classes, functions, calls)
-  5.  Build Directed Graph in NetworkX
-  6.  Prune graph & generate topology summary JSON
-  7–12. Hand JSON to LangGraph agent →
-          LLM generates Eraser DaC →
-          Agent calls Eraser MCP →
-          Returns hosted diagram URL
+Pipeline:
+  1. Receive GitHub URL from client
+  2. Fetch repo tree via GitHub API (PAT-authenticated)
+  3. Parse each source file with Tree-sitter → ASTs
+  4. Extract structural metadata (imports, classes, functions, calls)
+  5. Build Directed Graph in NetworkX
+  6. Prune graph & generate topology summary JSON
+  7. LangGraph agent: LLM analyses graph → outputs React Flow nodes + edges JSON
+  8. Return React Flow JSON directly to frontend for client-side rendering
 """
 
 from __future__ import annotations
@@ -34,12 +32,11 @@ from pydantic import BaseModel, HttpUrl, field_validator
 # ── Load environment variables ─────────────────────────────────────────────────
 load_dotenv()
 
-GITHUB_PAT       = os.getenv("GITHUB_PAT", "")
-GROQ_API_KEY     = os.getenv("GROQ_API_KEY", "")
-GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY", "")
-ERASER_API_KEY   = os.getenv("ERASER_API_KEY", "")
-LLM_PROVIDER     = os.getenv("LLM_PROVIDER", "groq").lower()
-LOG_LEVEL        = os.getenv("LOG_LEVEL", "INFO").upper()
+GITHUB_PAT     = os.getenv("GITHUB_PAT", "")
+GROQ_API_KEY   = os.getenv("GROQ_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+LLM_PROVIDER   = os.getenv("LLM_PROVIDER", "groq").lower()
+LOG_LEVEL      = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # Determine LLM API key based on provider
 LLM_API_KEY = GROQ_API_KEY if LLM_PROVIDER == "groq" else GEMINI_API_KEY
@@ -98,9 +95,10 @@ class AnalyzeRequest(BaseModel):
 
 
 class AnalyzeResponse(BaseModel):
-    diagram_url: str
+    # React Flow payload — consumed directly by the frontend
+    react_flow_nodes: list
+    react_flow_edges: list
     arch_summary: str
-    dac_syntax: str
     graph_stats: dict
     processing_time_seconds: float
     warning: str = ""
@@ -113,7 +111,6 @@ async def health():
     return {
         "status": "ok",
         "llm_provider": LLM_PROVIDER,
-        "eraser_configured": bool(ERASER_API_KEY),
         "github_pat_configured": bool(GITHUB_PAT),
     }
 
@@ -122,7 +119,7 @@ async def health():
 async def analyze_repo(req: AnalyzeRequest):
     """
     Main pipeline endpoint. Accepts a GitHub URL and returns a
-    hosted Eraser.io architecture diagram URL.
+    React Flow nodes + edges JSON for client-side rendering.
     """
     t_start = time.monotonic()
     repo_url = req.repo_url
@@ -169,7 +166,7 @@ async def analyze_repo(req: AnalyzeRequest):
         graph_json["edge_count"],
     )
 
-    # ── Steps 7-12: LangGraph agent + Eraser MCP ──────────────────────────────
+    # ── Steps 7-8: LangGraph agent → React Flow JSON ──────────────────────────
     if not LLM_API_KEY:
         raise HTTPException(
             status_code=500,
@@ -183,14 +180,14 @@ async def analyze_repo(req: AnalyzeRequest):
         graph_json=graph_json,
         llm_provider=LLM_PROVIDER,
         llm_api_key=LLM_API_KEY,
-        eraser_api_key=ERASER_API_KEY,
     )
 
     elapsed = round(time.monotonic() - t_start, 2)
     logger.info(
-        "Analysis complete in %.2fs — diagram_url=%s error=%s",
+        "Analysis complete in %.2fs — nodes=%d edges=%d error=%s",
         elapsed,
-        agent_result.get("diagram_url"),
+        len(agent_result.get("react_flow_nodes", [])),
+        len(agent_result.get("react_flow_edges", [])),
         agent_result.get("error"),
     )
 
@@ -200,7 +197,8 @@ async def analyze_repo(req: AnalyzeRequest):
         "files_analysed": len(file_contents),
         "graph_nodes": graph_json["node_count"],
         "graph_edges": graph_json["edge_count"],
-        "diagram_url": agent_result.get("diagram_url"),
+        "react_flow_nodes": len(agent_result.get("react_flow_nodes", [])),
+        "react_flow_edges": len(agent_result.get("react_flow_edges", [])),
         "error": agent_result.get("error"),
         "processing_time_seconds": elapsed,
     }
@@ -211,9 +209,9 @@ async def analyze_repo(req: AnalyzeRequest):
         pass  # Don't fail the request due to logging errors
 
     return AnalyzeResponse(
-        diagram_url=agent_result.get("diagram_url", ""),
+        react_flow_nodes=agent_result.get("react_flow_nodes", []),
+        react_flow_edges=agent_result.get("react_flow_edges", []),
         arch_summary=agent_result.get("arch_summary", ""),
-        dac_syntax=agent_result.get("dac_syntax", ""),
         graph_stats={
             "files_analysed": len(file_contents),
             "nodes": graph_json["node_count"],
