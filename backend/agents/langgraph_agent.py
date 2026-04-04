@@ -74,7 +74,7 @@ produce a React Flow diagram JSON that visually represents the detailed module-l
 }
 
 ## Node & Layout Rules:
-- Use a maximum of 20 nodes — pick the most architecturally significant files/modules.
+- Use a maximum of 30 nodes — pick the most architecturally significant files/modules.
 - Group nodes into logical COLUMNS by layer (left-to-right: entry → controllers → services → data):
     Column 0 (x=50):   Entry points / main files
     Column 1 (x=300):  Routes / Controllers / Handlers
@@ -304,19 +304,18 @@ class AgentState(TypedDict):
 
 # ── Graph compression ─────────────────────────────────────────────────────────
 
-def _compress_graph(graph_json: dict) -> str:
+def _compress_graph(graph_json: dict, include_file_paths: bool = False) -> str:
     def _trim_node(n: dict) -> dict:
-        """Keep only the fields the LLM needs — drop nothing structural."""
         return {
-            "id":               n.get("id"),
-            "label":            n.get("label"),
-            "language":         n.get("language"),
-            "imports":          n.get("imports", [])[:15],       # top-15 imports per file
-            "classes":          n.get("classes", [])[:10],
-            "functions":        n.get("functions", [])[:10],
+            "id":                n.get("id"),
+            "label":             n.get("label"),
+            "language":          n.get("language"),
+            "imports":           n.get("imports", [])[:15],
+            "classes":           n.get("classes", [])[:10],
+            "functions":         n.get("functions", [])[:10],
             "has_external_apis": n.get("has_external_apis", False),
-            "in_degree":        n.get("in_degree", 0),
-            "out_degree":       n.get("out_degree", 0),
+            "in_degree":         n.get("in_degree", 0),
+            "out_degree":        n.get("out_degree", 0),
         }
 
     compressed = {
@@ -325,19 +324,20 @@ def _compress_graph(graph_json: dict) -> str:
         "hubs":         graph_json.get("hubs", []),
         "entry_points": graph_json.get("entry_points", []),
         "clusters":     graph_json.get("clusters", {}),
-        # All file paths in the repo (including unsupported languages) so the
-        # LLM can infer the tech stack even when AST parsing wasn't possible
-        "all_file_paths": graph_json.get("all_file_paths", []),
         "nodes": [
             _trim_node(n)
             for n in sorted(
                 graph_json.get("nodes", []),
                 key=lambda n: n.get("in_degree", 0),
                 reverse=True,
-            )[:20]
+            )
         ],
-        "edges": graph_json.get("edges", [])[:40],
+        "edges": graph_json.get("edges", []),
     }
+    # Only HLD needs the full file path list to infer tech stack
+    if include_file_paths:
+        compressed["all_file_paths"] = graph_json.get("all_file_paths", [])[:80]
+
     return json.dumps(compressed, indent=2)
 
 
@@ -394,7 +394,7 @@ def _validate_and_fix(parsed: dict, default_type: str | None = None) -> dict:
 
 async def analyze_lld(state: AgentState, llm) -> AgentState:
     try:
-        compressed = _compress_graph(state["graph_json"])
+        compressed = _compress_graph(state["graph_json"])  # lean — no file paths
         messages = [
             SystemMessage(content=LLD_SYSTEM_PROMPT),
             HumanMessage(content=LLD_USER_PROMPT.format(graph_json=compressed)),
@@ -422,11 +422,26 @@ async def analyze_lld(state: AgentState, llm) -> AgentState:
 
 async def analyze_hld(state: AgentState, llm) -> AgentState:
     try:
-        compressed = _compress_graph(state["graph_json"])
+        compressed = _compress_graph(state["graph_json"], include_file_paths=True)  # full — needs file paths for stack inference
         messages = [
             SystemMessage(content=HLD_SYSTEM_PROMPT),
             HumanMessage(content=HLD_USER_PROMPT.format(graph_json=compressed)),
         ]
+        response = await llm.ainvoke(messages)
+        parsed = _parse_llm_json(response.content)
+        parsed = _validate_and_fix(parsed, default_type="custom")
+        return {
+            **state,
+            "hld_nodes": parsed.get("nodes", []),
+            "hld_edges": parsed.get("edges", []),
+        }
+    except Exception as exc:
+        return {
+            **state,
+            "hld_nodes": [],
+            "hld_edges": [],
+            "error": state.get("error", "") + f" | HLD analysis failed: {exc}",
+        }
         response = await llm.ainvoke(messages)
         parsed = _parse_llm_json(response.content)
         parsed = _validate_and_fix(parsed, default_type="custom")
@@ -448,7 +463,7 @@ async def analyze_hld(state: AgentState, llm) -> AgentState:
 
 async def analyze_erd(state: AgentState, llm) -> AgentState:
     try:
-        compressed = _compress_graph(state["graph_json"])
+        compressed = _compress_graph(state["graph_json"])  # lean — no file paths needed
         messages = [
             SystemMessage(content=ERD_SYSTEM_PROMPT),
             HumanMessage(content=ERD_USER_PROMPT.format(graph_json=compressed)),

@@ -26,21 +26,30 @@ from tree_sitter import Language, Node, Parser
 import tree_sitter_python as tspython
 import tree_sitter_javascript as tsjavascript
 import tree_sitter_typescript as tstypescript
+import tree_sitter_go as tsgo
+import tree_sitter_rust as tsrust
+import tree_sitter_java as tsjava
 
 
 # ── Language setup ─────────────────────────────────────────────────────────────
 
-_PY_LANG = Language(tspython.language())
-_JS_LANG = Language(tsjavascript.language())
-_TS_LANG = Language(tstypescript.language_typescript())
+_PY_LANG  = Language(tspython.language())
+_JS_LANG  = Language(tsjavascript.language())
+_TS_LANG  = Language(tstypescript.language_typescript())
 _TSX_LANG = Language(tstypescript.language_tsx())
+_GO_LANG  = Language(tsgo.language())
+_RS_LANG  = Language(tsrust.language())
+_JV_LANG  = Language(tsjava.language())
 
 _EXT_TO_LANG: dict[str, Language] = {
-    ".py": _PY_LANG,
-    ".js": _JS_LANG,
-    ".jsx": _JS_LANG,
-    ".ts": _TS_LANG,
-    ".tsx": _TSX_LANG,
+    ".py":   _PY_LANG,
+    ".js":   _JS_LANG,
+    ".jsx":  _JS_LANG,
+    ".ts":   _TS_LANG,
+    ".tsx":  _TSX_LANG,
+    ".go":   _GO_LANG,
+    ".rs":   _RS_LANG,
+    ".java": _JV_LANG,
 }
 
 
@@ -181,7 +190,107 @@ def _extract_js_ts(tree_root: Node, source: bytes) -> tuple[list, list, list, li
     return imports, classes, functions, calls, ext_apis
 
 
-# ── Public API ─────────────────────────────────────────────────────────────────
+def _extract_go(tree_root: Node, source: bytes) -> tuple[list, list, list, list, list]:
+    imports, classes, functions, calls, ext_apis = [], [], [], [], []
+
+    for node in _walk(tree_root):
+        t = node.type
+
+        # import "pkg" or import ( "pkg1" "pkg2" )
+        if t == "import_spec":
+            path_nodes = [c for c in node.named_children if c.type == "interpreted_string_literal"]
+            for pn in path_nodes:
+                raw = _node_text(pn, source).strip('"')
+                imports.append(raw.split("/")[-1])  # last segment e.g. "fmt", "fiber"
+
+        # struct types act as classes in Go
+        elif t == "type_declaration":
+            for child in _walk(node):
+                if child.type == "type_spec":
+                    name_nodes = [c for c in child.named_children if c.type == "type_identifier"]
+                    if name_nodes:
+                        classes.append(_node_text(name_nodes[0], source))
+
+        # function / method declarations
+        elif t in ("function_declaration", "method_declaration"):
+            name_nodes = [c for c in node.named_children if c.type == "identifier"]
+            if name_nodes:
+                functions.append(_node_text(name_nodes[0], source))
+
+        # call expressions
+        elif t == "call_expression":
+            fn_node = node.child_by_field_name("function")
+            if fn_node:
+                call_text = _node_text(fn_node, source)
+                calls.append(call_text)
+                if any(p in call_text for p in ("http.Get", "http.Post", "http.Do",
+                                                  "client.Get", "client.Post")):
+                    ext_apis.append(call_text)
+
+    return imports, classes, functions, calls, ext_apis
+
+
+def _extract_rust(tree_root: Node, source: bytes) -> tuple[list, list, list, list, list]:
+    imports, classes, functions, calls, ext_apis = [], [], [], [], []
+
+    for node in _walk(tree_root):
+        t = node.type
+
+        # use std::collections::HashMap  →  "use_declaration"
+        if t == "use_declaration":
+            imports.append(_node_text(node, source).replace("use ", "").split("::")[0].strip(";"))
+
+        # struct / enum as classes
+        elif t in ("struct_item", "enum_item"):
+            name_nodes = [c for c in node.named_children if c.type == "type_identifier"]
+            if name_nodes:
+                classes.append(_node_text(name_nodes[0], source))
+
+        # fn declarations
+        elif t == "function_item":
+            name_nodes = [c for c in node.named_children if c.type == "identifier"]
+            if name_nodes:
+                functions.append(_node_text(name_nodes[0], source))
+
+        # call expressions
+        elif t == "call_expression":
+            fn_node = node.child_by_field_name("function")
+            if fn_node:
+                call_text = _node_text(fn_node, source)
+                calls.append(call_text)
+                if any(p in call_text for p in ("reqwest::", "ureq::", "hyper::")):
+                    ext_apis.append(call_text)
+
+    return imports, classes, functions, calls, ext_apis
+
+
+def _extract_java(tree_root: Node, source: bytes) -> tuple[list, list, list, list, list]:
+    imports, classes, functions, calls, ext_apis = [], [], [], [], []
+
+    for node in _walk(tree_root):
+        t = node.type
+
+        if t == "import_declaration":
+            raw = _node_text(node, source).replace("import ", "").strip(";").strip()
+            imports.append(raw.split(".")[-1])  # simple class name
+
+        elif t == "class_declaration":
+            name_nodes = [c for c in node.named_children if c.type == "identifier"]
+            if name_nodes:
+                classes.append(_node_text(name_nodes[0], source))
+
+        elif t == "method_declaration":
+            name_nodes = [c for c in node.named_children if c.type == "identifier"]
+            if name_nodes:
+                functions.append(_node_text(name_nodes[0], source))
+
+        elif t == "method_invocation":
+            name_nodes = [c for c in node.named_children if c.type == "identifier"]
+            if name_nodes:
+                call_text = _node_text(name_nodes[0], source)
+                calls.append(call_text)
+
+    return imports, classes, functions, calls, ext_apis
 
 def parse_files(file_contents: dict[str, str]) -> list[FileMetadata]:
     """
@@ -194,13 +303,13 @@ def parse_files(file_contents: dict[str, str]) -> list[FileMetadata]:
         ext = "." + path.rsplit(".", 1)[-1] if "." in path else ""
         lang = _EXT_TO_LANG.get(ext)
         if lang is None:
-            continue  # unsupported extension
+            continue
 
-        lang_name = (
-            "python" if ext == ".py"
-            else "typescript" if ext in (".ts", ".tsx")
-            else "javascript"
-        )
+        lang_name = {
+            ".py": "python", ".js": "javascript", ".jsx": "javascript",
+            ".ts": "typescript", ".tsx": "typescript",
+            ".go": "go", ".rs": "rust", ".java": "java",
+        }.get(ext, "unknown")
 
         try:
             parser = Parser(lang)
@@ -208,15 +317,18 @@ def parse_files(file_contents: dict[str, str]) -> list[FileMetadata]:
             tree = parser.parse(source_bytes)
 
             if lang_name == "python":
-                imports, classes, functions, calls, ext_apis = _extract_python(
-                    tree.root_node, source_bytes
-                )
+                imports, classes, functions, calls, ext_apis = _extract_python(tree.root_node, source_bytes)
+            elif lang_name in ("javascript", "typescript"):
+                imports, classes, functions, calls, ext_apis = _extract_js_ts(tree.root_node, source_bytes)
+            elif lang_name == "go":
+                imports, classes, functions, calls, ext_apis = _extract_go(tree.root_node, source_bytes)
+            elif lang_name == "rust":
+                imports, classes, functions, calls, ext_apis = _extract_rust(tree.root_node, source_bytes)
+            elif lang_name == "java":
+                imports, classes, functions, calls, ext_apis = _extract_java(tree.root_node, source_bytes)
             else:
-                imports, classes, functions, calls, ext_apis = _extract_js_ts(
-                    tree.root_node, source_bytes
-                )
+                imports, classes, functions, calls, ext_apis = [], [], [], [], []
 
-            # Deduplicate while preserving order
             def dedup(lst: list[str]) -> list[str]:
                 seen: set[str] = set()
                 return [x for x in lst if x not in seen and not seen.add(x)]  # type: ignore
@@ -228,13 +340,11 @@ def parse_files(file_contents: dict[str, str]) -> list[FileMetadata]:
                     imports=dedup(imports),
                     classes=dedup(classes),
                     functions=dedup(functions),
-                    calls=dedup(calls[:50]),      # cap to avoid giant lists
+                    calls=dedup(calls[:50]),
                     external_apis=dedup(ext_apis),
                 )
             )
         except Exception:
-            # If parsing fails, add a skeleton entry so the file still
-            # appears as a node in the graph
             results.append(FileMetadata(path=path, language=lang_name))
 
     return results

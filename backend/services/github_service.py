@@ -18,18 +18,21 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 # ── Supported file extensions for AST parsing ─────────────────────────────────
 SUPPORTED_EXTENSIONS = {
-    ".py": "python",
-    ".js": "javascript",
-    ".jsx": "javascript",
-    ".ts": "typescript",
-    ".tsx": "typescript",
+    ".py":   "python",
+    ".js":   "javascript",
+    ".jsx":  "javascript",
+    ".ts":   "typescript",
+    ".tsx":  "typescript",
+    ".go":   "go",
+    ".rs":   "rust",
+    ".java": "java",
 }
 
 # Max file size to fetch (200 KB) — avoids giant generated/minified files
 MAX_FILE_SIZE_BYTES = 200_000
 
-# Maximum number of source files to analyse (keeps latency reasonable)
-MAX_FILES = 80
+# Maximum number of source files to analyse
+MAX_FILES = 120
 
 
 def parse_github_url(url: str) -> tuple[str, str, Optional[str]]:
