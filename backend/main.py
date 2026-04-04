@@ -161,6 +161,7 @@ async def analyze_repo(req: AnalyzeRequest):
     from services.graph_builder import build_graph
 
     graph_json = build_graph(file_metadata)
+    graph_json["all_file_paths"] = sorted(file_contents.keys())[:150]
     logger.info(
         "Graph built: %d nodes, %d edges",
         graph_json["node_count"],

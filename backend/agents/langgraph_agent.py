@@ -186,21 +186,25 @@ HLD_USER_PROMPT = """Analyse this dependency graph and produce a HIGH-LEVEL syst
 Graph JSON:
 {graph_json}
 
+IMPORTANT: The graph JSON contains an "all_file_paths" list — use this to infer the full tech stack
+even if AST parsing only covered some languages (e.g. Go, Rust, Java files won't have parsed imports
+but their filenames reveal the stack).
+
 STRICT RULES — only represent infrastructure that is EVIDENCED in the graph:
-- Only include a "database" node if you see actual DB imports (sqlalchemy, psycopg2, pymongo, prisma, django.db, typeorm, sequelize, etc.) in the graph.
-- Only include a "cache" node if you see redis, memcached, or similar imports.
-- Only include a "queue" node if you see kafka, rabbitmq, celery, sqs, or similar imports.
+- Only include a "database" node if you see actual DB imports (sqlalchemy, psycopg2, pymongo, prisma, django.db, typeorm, sequelize, etc.) in node imports OR db-related filenames (postgres, mysql, mongo, sqlite, redis) in all_file_paths.
+- Only include a "cache" node if you see redis, memcached, or similar imports or filenames.
+- Only include a "queue" node if you see kafka, rabbitmq, celery, sqs, or similar imports or filenames.
 - Only include a "cdn" node if you see static file serving or CDN SDK imports.
-- Do NOT invent infrastructure components that have no evidence in the graph.
-- If the backend is stateless (no DB/cache/queue imports), show only: client → server → external APIs.
+- Do NOT invent infrastructure components that have no evidence in the graph or file paths.
+- If the backend is stateless (no DB/cache/queue evidence), show only: client → server → external APIs.
 
 Instructions:
-1. Identify the major infrastructure concerns present: frontend, backend server, external APIs.
-2. Look at imports/dependencies to infer which external services are ACTUALLY used.
-3. Group all business logic files into a single "API Server" or "Backend Service" block.
-4. Identify separate worker processes or background jobs ONLY if they exist as separate entry points.
-5. Show only 3–6 top-level system blocks with clear labels — fewer is better than hallucinating.
-6. Add descriptive edge labels (HTTP, REST, etc.) to show how components communicate.
+1. Scan all_file_paths for language/framework clues (e.g. .go files → Go, fiber/ → Fiber framework, .rs → Rust).
+2. Scan node imports for external service clues.
+3. Group all business logic into a single backend block — label it with the actual framework if detectable.
+4. Identify separate workers/jobs only if evidenced by filenames like worker.go, job.py, consumer.js etc.
+5. Show 3–6 system blocks max — fewer is better than hallucinating.
+6. Add edge labels (HTTP, SQL, WebSocket, etc.) only where the communication protocol is evidenced.
 """
 
 
@@ -321,6 +325,9 @@ def _compress_graph(graph_json: dict) -> str:
         "hubs":         graph_json.get("hubs", []),
         "entry_points": graph_json.get("entry_points", []),
         "clusters":     graph_json.get("clusters", {}),
+        # All file paths in the repo (including unsupported languages) so the
+        # LLM can infer the tech stack even when AST parsing wasn't possible
+        "all_file_paths": graph_json.get("all_file_paths", []),
         "nodes": [
             _trim_node(n)
             for n in sorted(
@@ -337,12 +344,22 @@ def _compress_graph(graph_json: dict) -> str:
 # ── LLM response parser ────────────────────────────────────────────────────────
 
 def _parse_llm_json(raw: str) -> dict:
+    # Strip markdown fences
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
     raw = re.sub(r"```\s*$", "", raw.strip(), flags=re.MULTILINE)
+    # Extract outermost JSON object
     json_match = re.search(r"\{[\s\S]*\}", raw)
     if not json_match:
         raise ValueError("LLM response did not contain a JSON object")
-    return json.loads(json_match.group())
+    candidate = json_match.group()
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        # Fix common LLM mistakes: single quotes, extra wrapping quotes on keys
+        candidate = candidate.replace("'", '"')
+        # Remove extra quotes around keys like '"nodes"': → "nodes":
+        candidate = re.sub(r'"\"(\w+)\""', r'"\1"', candidate)
+        return json.loads(candidate)
 
 
 # ── Validate & fix nodes/edges ────────────────────────────────────────────────
