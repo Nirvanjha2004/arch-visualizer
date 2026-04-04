@@ -57,15 +57,24 @@ A full-stack web app that analyzes any public GitHub repository and generates an
 - `GET /api/health` — Health check, shows LLM provider and GitHub PAT status
 - `POST /api/analyze` — Main pipeline: accepts `{ repo_url: "https://github.com/..." }`, returns React Flow nodes/edges + architecture summary
 
-## LLM Pipeline
+## LLM Pipeline (Triple-view)
 
 1. GitHub API fetches repo file tree and contents
 2. Tree-sitter parses Python/JS/TS files into ASTs
 3. NetworkX builds a directed dependency graph
 4. Graph is compressed (top 20 nodes by in-degree, first 40 edges)
-5. LangGraph agent sends the graph to Groq (llama3-70b-8192) or Gemini (gemini-1.5-flash)
-6. LLM returns React Flow JSON (nodes + edges + summary)
-7. Frontend renders the interactive diagram
+5. LangGraph agent runs three sequential LLM calls:
+   - **Node 1 (LLD):** detailed module-level dependency graph
+   - **Node 2 (HLD):** 5–8 abstract system blocks with `systemType` field for icon rendering
+   - **Node 3 (ERD):** entity-relationship diagram — ORM models with typed fields and cardinality edges
+6. API returns `{ lld, hld, erd, arch_summary, graph_stats, ... }`
+7. Frontend renders three tabs: High-Level Design · Detailed Architecture · Database Schema (ERD)
+
+## Frontend Views
+
+- **HLD tab** — custom nodes with Lucide icons per `systemType` (Monitor, Server, Database, etc.)
+- **LLD tab** — nodes colour-coded by x-position into architecture layers
+- **ERD tab** — database-table style nodes showing model name + typed fields; 🔑 marks primary keys; edges show cardinality (1:1, 1:N, N:M)
 
 ## Dependency Notes
 

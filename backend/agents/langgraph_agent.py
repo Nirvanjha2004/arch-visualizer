@@ -1,28 +1,16 @@
 """
-LangGraph Agent — Steps 7-10 of the pipeline (React Flow edition).
+LangGraph Agent — Triple-output pipeline (LLD + HLD + ERD).
 
 State machine:
-  ┌──────────────────────┐
-  │  analyze_architecture│ ──► END
-  └──────────────────────┘
+  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+  │ analyze_lld │──►│ analyze_hld │──►│ analyze_erd │──► END
+  └─────────────┘   └─────────────┘   └─────────────┘
 
-The single LLM node receives the compressed NetworkX Graph JSON and outputs
-a React Flow-compatible JSON payload:
-
-  {
-    "summary": "prose description of architectural patterns",
-    "nodes": [
-      { "id": "unique_id", "data": { "label": "Display Name" }, "position": { "x": 0, "y": 0 } },
-      ...
-    ],
-    "edges": [
-      { "id": "e_src_tgt", "source": "src_id", "target": "tgt_id", "animated": true },
-      ...
-    ]
-  }
-
-The FastAPI layer returns this directly to the React frontend, which renders
-it 100% client-side using @xyflow/react — no external services required.
+Node 1 (LLD): detailed module-level dependency graph → React Flow nodes/edges
+Node 2 (HLD): abstract infrastructure block diagram → React Flow nodes/edges
+              each HLD node carries data.systemType for icon rendering
+Node 3 (ERD): entity-relationship diagram from ORM models → React Flow nodes/edges
+              each ERD node carries data.modelName + data.fields[]
 """
 
 from __future__ import annotations
@@ -38,7 +26,6 @@ from langgraph.graph import END, StateGraph
 # ── LLM factory ───────────────────────────────────────────────────────────────
 
 def _build_llm(provider: str, api_key: str):
-    """Return a LangChain chat model based on the configured provider."""
     if provider == "groq":
         from langchain_groq import ChatGroq
         return ChatGroq(
@@ -59,11 +46,11 @@ def _build_llm(provider: str, api_key: str):
         raise ValueError(f"Unsupported LLM provider: {provider}")
 
 
-# ── Prompts ───────────────────────────────────────────────────────────────────
+# ── LLD Prompts ───────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are an expert software architect specialising in codebase analysis.
+LLD_SYSTEM_PROMPT = """You are an expert software architect specialising in codebase analysis.
 Your task is to analyse a dependency graph JSON extracted from a GitHub repository and
-produce a React Flow diagram JSON that visually represents the architecture.
+produce a React Flow diagram JSON that visually represents the detailed module-level architecture.
 
 ## Output Requirements (STRICT — return ONLY valid JSON, no markdown fences):
 
@@ -109,77 +96,270 @@ produce a React Flow diagram JSON that visually represents the architecture.
 - Every node id referenced in edges MUST exist in the nodes array.
 """
 
-USER_PROMPT_TEMPLATE = """Analyse the following dependency graph extracted from a GitHub repository.
+LLD_USER_PROMPT = """Analyse the following dependency graph extracted from a GitHub repository.
 Identify the architectural layers and key dependencies, then produce the React Flow JSON.
 
 Graph JSON:
 {graph_json}
 
+STRICT RULES — only represent what actually exists in the graph above:
+- Only create nodes for files/modules that appear in the graph JSON nodes list.
+- Only create edges for import relationships that appear in the graph JSON edges list.
+- Do NOT invent nodes, layers, or connections that are not evidenced in the graph.
+- If a layer (e.g. Database) has no files in the graph, omit that layer entirely.
+
 Focus on:
 - Entry points and main application files (leftmost column)
 - API routes / controllers
 - Service / business logic layer
-- Data models and repositories
-- Database / cache integrations (rightmost column)
+- Data models and repositories — ONLY if they exist in the graph
+- Database / cache integrations — ONLY if they exist in the graph
 - Utilities and config (rightmost column)
 
 Assign clear, descriptive labels. Ensure no two nodes share the same x,y position.
 """
 
 
+# ── HLD Prompts ───────────────────────────────────────────────────────────────
+
+HLD_SYSTEM_PROMPT = """You are an expert software architect creating a High-Level Design (HLD) diagram.
+Your task is to abstract a detailed code dependency graph into a clean system-level block diagram
+showing the major infrastructure components and how they interact.
+
+## Output Requirements (STRICT — return ONLY valid JSON, no markdown fences):
+
+{
+  "nodes": [
+    {
+      "id": "unique_snake_case_id",
+      "type": "custom",
+      "data": {
+        "label": "Human-Readable Component Name",
+        "systemType": "<one of the types below>",
+        "description": "One sentence describing this component's role."
+      },
+      "position": { "x": <integer>, "y": <integer> }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_<source_id>_<target_id>",
+      "source": "<source node id>",
+      "target": "<target node id>",
+      "label": "<short action label e.g. HTTP, SQL, gRPC, Pub/Sub>",
+      "animated": true
+    }
+  ]
+}
+
+## systemType values (MUST use one of these exactly):
+- "client"       → Browser / Mobile / Frontend UI
+- "server"       → API Server / Backend / Web Server
+- "service"      → Microservice / Worker / Background Job
+- "database"     → SQL or NoSQL Database
+- "cache"        → Cache (Redis, Memcached, in-memory)
+- "queue"        → Message Queue / Event Bus (Kafka, RabbitMQ, SQS)
+- "external_api" → Third-party API / External service
+- "cdn"          → CDN / Static file storage
+
+## Layout Rules:
+- Use 5–8 nodes maximum — focus on major system components only, NOT individual files.
+- Think in terms of: Who are the clients? What servers handle requests? What data stores exist?
+  What external services are called? What background workers run?
+- Layout left-to-right by data flow:
+    x=100:  Clients / Entry (browsers, mobile apps)
+    x=400:  API / Backend servers
+    x=700:  Internal services / workers
+    x=1000: Data stores (databases, caches, queues)
+    x=1300: External APIs / CDN
+- Space nodes vertically: y = row_index * 180, start at y=100.
+- Make labels concise and infrastructure-level (e.g., "FastAPI Server", "PostgreSQL", "React App").
+
+## CRITICAL:
+- Return ONLY the raw JSON object — no explanation, no code fences, no extra text.
+- Every node id referenced in edges MUST exist in the nodes array.
+- Do NOT include individual source files as nodes — only system-level blocks.
+"""
+
+HLD_USER_PROMPT = """Analyse this dependency graph and produce a HIGH-LEVEL system architecture diagram.
+
+Graph JSON:
+{graph_json}
+
+STRICT RULES — only represent infrastructure that is EVIDENCED in the graph:
+- Only include a "database" node if you see actual DB imports (sqlalchemy, psycopg2, pymongo, prisma, django.db, typeorm, sequelize, etc.) in the graph.
+- Only include a "cache" node if you see redis, memcached, or similar imports.
+- Only include a "queue" node if you see kafka, rabbitmq, celery, sqs, or similar imports.
+- Only include a "cdn" node if you see static file serving or CDN SDK imports.
+- Do NOT invent infrastructure components that have no evidence in the graph.
+- If the backend is stateless (no DB/cache/queue imports), show only: client → server → external APIs.
+
+Instructions:
+1. Identify the major infrastructure concerns present: frontend, backend server, external APIs.
+2. Look at imports/dependencies to infer which external services are ACTUALLY used.
+3. Group all business logic files into a single "API Server" or "Backend Service" block.
+4. Identify separate worker processes or background jobs ONLY if they exist as separate entry points.
+5. Show only 3–6 top-level system blocks with clear labels — fewer is better than hallucinating.
+6. Add descriptive edge labels (HTTP, REST, etc.) to show how components communicate.
+"""
+
+
+# ── Agent State ────────────────────────────────────────────────────────────────
+
+ERD_SYSTEM_PROMPT = """You are an expert database architect analyzing a codebase.
+Your task is to identify all data models, ORM entities, schemas, or data classes
+and produce a React Flow Entity-Relationship Diagram (ERD).
+
+## Output Requirements (STRICT — return ONLY valid JSON, no markdown fences):
+
+{
+  "nodes": [
+    {
+      "id": "snake_case_model_id",
+      "type": "erd",
+      "position": { "x": <integer>, "y": <integer> },
+      "data": {
+        "modelName": "ModelName",
+        "fields": [
+          { "name": "field_name", "type": "DataType", "isPrimaryKey": true },
+          { "name": "other_field", "type": "String", "isPrimaryKey": false }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_users_posts",
+      "source": "users",
+      "target": "posts",
+      "label": "1:N",
+      "animated": false
+    }
+  ]
+}
+
+## Node Rules:
+- Each node represents ONE data model / ORM class / schema / data class.
+- Use up to 15 models maximum — pick the most important ones.
+- `modelName` must be PascalCase (e.g., "User", "BlogPost", "OrderItem").
+- `fields` array: include 3–8 fields per model. Always include primary keys.
+- Common field types: UUID, Integer, String, Text, Boolean, DateTime, Float, ForeignKey, JSON, Enum.
+- Always mark the primary key field with `isPrimaryKey: true`.
+- For foreign key fields, use type "ForeignKey(ModelName)".
+
+## Layout Rules:
+- Place related models close together.
+- Use a grid layout: x = column * 320 + 50, y = row * 400 + 50.
+- Spread columns across x=50, x=370, x=690, x=1010, etc.
+- Start y at 50, increment by 400 per row.
+
+## Edge Rules:
+- Show relationships between models (foreign keys, many-to-many).
+- Use clear relationship labels: "1:1", "1:N", "N:M".
+- Only draw edges between models that ARE in your nodes list.
+- Do NOT animate ERD edges (animated: false).
+
+## CRITICAL:
+- Return ONLY the raw JSON object — no explanation, no code fences, no extra text.
+- If NO data models exist in the codebase, return exactly: {"nodes": [], "edges": [], "no_models": true}
+- Do NOT invent or infer models. Only include models that are explicitly defined in the source files.
+- Every source/target in edges MUST match a node id exactly.
+"""
+
+ERD_USER_PROMPT = """Analyse the following dependency graph from a GitHub repository and produce an ERD.
+
+Graph JSON:
+{graph_json}
+
+STRICT RULES:
+- Only include models that are EXPLICITLY defined in the source files shown in the graph.
+- Look for ORM models (SQLAlchemy, Django ORM, Mongoose, Prisma, TypeORM, Pydantic BaseModel used as DB schema, dataclasses used as DB entities, etc.).
+- If you see NO ORM imports (sqlalchemy, django.db, mongoose, prisma, typeorm, sequelize, etc.) in the graph, return {"nodes": [], "edges": [], "no_models": true} immediately.
+- Do NOT infer or invent models based on the application's purpose or domain.
+- Pydantic models used only for API request/response validation are NOT data models — do not include them unless they map to a database table.
+- Only show relationships via edges if foreign key fields are explicitly present in the model definitions.
+"""
+
+
 # ── Agent State ────────────────────────────────────────────────────────────────
 
 class AgentState(TypedDict):
-    graph_json: dict[str, Any]        # Input: NetworkX graph topology
-    react_flow_nodes: list[dict]      # Output: React Flow nodes array
-    react_flow_edges: list[dict]      # Output: React Flow edges array
-    arch_summary: str                 # Output: prose architecture description
-    error: str                        # Non-empty if anything went wrong
+    graph_json: dict[str, Any]
+    # LLD outputs
+    lld_nodes: list[dict]
+    lld_edges: list[dict]
+    arch_summary: str
+    # HLD outputs
+    hld_nodes: list[dict]
+    hld_edges: list[dict]
+    # ERD outputs
+    erd_nodes: list[dict]
+    erd_edges: list[dict]
+    error: str
 
 
 # ── Graph compression ─────────────────────────────────────────────────────────
 
 def _compress_graph(graph_json: dict) -> str:
-    """
-    Trim the graph to stay within LLM context limits.
-    Keeps top 20 nodes by in-degree and the first 40 edges.
-    """
+    def _trim_node(n: dict) -> dict:
+        """Keep only the fields the LLM needs — drop nothing structural."""
+        return {
+            "id":               n.get("id"),
+            "label":            n.get("label"),
+            "language":         n.get("language"),
+            "imports":          n.get("imports", [])[:15],       # top-15 imports per file
+            "classes":          n.get("classes", [])[:10],
+            "functions":        n.get("functions", [])[:10],
+            "has_external_apis": n.get("has_external_apis", False),
+            "in_degree":        n.get("in_degree", 0),
+            "out_degree":       n.get("out_degree", 0),
+        }
+
     compressed = {
         "node_count":   graph_json.get("node_count"),
         "edge_count":   graph_json.get("edge_count"),
         "hubs":         graph_json.get("hubs", []),
         "entry_points": graph_json.get("entry_points", []),
         "clusters":     graph_json.get("clusters", {}),
-        "nodes": sorted(
-            graph_json.get("nodes", []),
-            key=lambda n: n.get("in_degree", 0),
-            reverse=True,
-        )[:20],
+        "nodes": [
+            _trim_node(n)
+            for n in sorted(
+                graph_json.get("nodes", []),
+                key=lambda n: n.get("in_degree", 0),
+                reverse=True,
+            )[:20]
+        ],
         "edges": graph_json.get("edges", [])[:40],
     }
     return json.dumps(compressed, indent=2)
 
 
-# ── LLM validation helpers ────────────────────────────────────────────────────
+# ── LLM response parser ────────────────────────────────────────────────────────
 
-def _validate_and_fix(parsed: dict) -> dict:
-    """
-    Ensure nodes and edges are structurally valid.
-    Removes edges whose source/target don't exist in the node list.
-    """
+def _parse_llm_json(raw: str) -> dict:
+    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
+    raw = re.sub(r"```\s*$", "", raw.strip(), flags=re.MULTILINE)
+    json_match = re.search(r"\{[\s\S]*\}", raw)
+    if not json_match:
+        raise ValueError("LLM response did not contain a JSON object")
+    return json.loads(json_match.group())
+
+
+# ── Validate & fix nodes/edges ────────────────────────────────────────────────
+
+def _validate_and_fix(parsed: dict, default_type: str | None = None) -> dict:
     nodes = parsed.get("nodes", [])
     edges = parsed.get("edges", [])
-
     valid_ids = {n["id"] for n in nodes if "id" in n}
 
-    # Fix missing position fields
     for i, node in enumerate(nodes):
         if "position" not in node:
-            node["position"] = {"x": (i % 6) * 250 + 50, "y": (i // 6) * 120 + 50}
+            node["position"] = {"x": (i % 6) * 250 + 50, "y": (i // 6) * 150 + 100}
         if "data" not in node:
             node["data"] = {"label": node.get("id", f"node_{i}")}
+        if default_type and node.get("type") != default_type:
+            node["type"] = default_type
 
-    # Drop edges referencing unknown node IDs; ensure animated=true
     clean_edges = []
     for edge in edges:
         if edge.get("source") in valid_ids and edge.get("target") in valid_ids:
@@ -193,71 +373,121 @@ def _validate_and_fix(parsed: dict) -> dict:
     return parsed
 
 
-# ── Node: analyse architecture ────────────────────────────────────────────────
+# ── LLD node ──────────────────────────────────────────────────────────────────
 
-async def analyze_architecture(state: AgentState, llm) -> AgentState:
-    """
-    Single LLM step: compress graph JSON → call LLM → parse React Flow JSON.
-    """
+async def analyze_lld(state: AgentState, llm) -> AgentState:
     try:
         compressed = _compress_graph(state["graph_json"])
         messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(
-                content=USER_PROMPT_TEMPLATE.format(graph_json=compressed)
-            ),
+            SystemMessage(content=LLD_SYSTEM_PROMPT),
+            HumanMessage(content=LLD_USER_PROMPT.format(graph_json=compressed)),
         ]
         response = await llm.ainvoke(messages)
-        raw: str = response.content
-
-        # Strip markdown code fences if the LLM wraps output
-        raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.MULTILINE)
-        raw = re.sub(r"```\s*$", "", raw.strip(), flags=re.MULTILINE)
-
-        # Extract the outermost JSON object
-        json_match = re.search(r"\{[\s\S]*\}", raw)
-        if not json_match:
-            raise ValueError("LLM response did not contain a JSON object")
-
-        parsed = json.loads(json_match.group())
+        parsed = _parse_llm_json(response.content)
         parsed = _validate_and_fix(parsed)
-
         return {
             **state,
-            "react_flow_nodes": parsed.get("nodes", []),
-            "react_flow_edges": parsed.get("edges", []),
-            "arch_summary":     parsed.get("summary", ""),
-            "error":            "",
+            "lld_nodes":   parsed.get("nodes", []),
+            "lld_edges":   parsed.get("edges", []),
+            "arch_summary": parsed.get("summary", ""),
+            "error": "",
         }
     except Exception as exc:
         return {
             **state,
-            "react_flow_nodes": [],
-            "react_flow_edges": [],
-            "error": f"LLM analysis failed: {exc}",
+            "lld_nodes": [],
+            "lld_edges": [],
+            "error": f"LLD analysis failed: {exc}",
+        }
+
+
+# ── HLD node ──────────────────────────────────────────────────────────────────
+
+async def analyze_hld(state: AgentState, llm) -> AgentState:
+    try:
+        compressed = _compress_graph(state["graph_json"])
+        messages = [
+            SystemMessage(content=HLD_SYSTEM_PROMPT),
+            HumanMessage(content=HLD_USER_PROMPT.format(graph_json=compressed)),
+        ]
+        response = await llm.ainvoke(messages)
+        parsed = _parse_llm_json(response.content)
+        parsed = _validate_and_fix(parsed, default_type="custom")
+        return {
+            **state,
+            "hld_nodes": parsed.get("nodes", []),
+            "hld_edges": parsed.get("edges", []),
+        }
+    except Exception as exc:
+        return {
+            **state,
+            "hld_nodes": [],
+            "hld_edges": [],
+            "error": state.get("error", "") + f" | HLD analysis failed: {exc}",
+        }
+
+
+# ── ERD node ──────────────────────────────────────────────────────────────────
+
+async def analyze_erd(state: AgentState, llm) -> AgentState:
+    try:
+        compressed = _compress_graph(state["graph_json"])
+        messages = [
+            SystemMessage(content=ERD_SYSTEM_PROMPT),
+            HumanMessage(content=ERD_USER_PROMPT.format(graph_json=compressed)),
+        ]
+        response = await llm.ainvoke(messages)
+        parsed = _parse_llm_json(response.content)
+
+        # LLM signalled no models exist — return empty ERD, not an error
+        if parsed.get("no_models") or (not parsed.get("nodes") and not parsed.get("edges")):
+            return {
+                **state,
+                "erd_nodes": [],
+                "erd_edges": [],
+            }
+
+        parsed = _validate_and_fix(parsed, default_type="erd")
+        # ERD edges should NOT be animated
+        for edge in parsed.get("edges", []):
+            edge["animated"] = False
+        return {
+            **state,
+            "erd_nodes": parsed.get("nodes", []),
+            "erd_edges": parsed.get("edges", []),
+        }
+    except Exception as exc:
+        return {
+            **state,
+            "erd_nodes": [],
+            "erd_edges": [],
+            "error": state.get("error", "") + f" | ERD analysis failed: {exc}",
         }
 
 
 # ── Graph assembly ────────────────────────────────────────────────────────────
 
 def build_agent(llm_provider: str, llm_api_key: str):
-    """
-    Compile the single-node LangGraph state machine.
-
-    Usage:
-        app = build_agent("groq", "gsk_...")
-        result = await app.ainvoke(initial_state)
-    """
     llm = _build_llm(llm_provider, llm_api_key)
 
     workflow = StateGraph(AgentState)
 
-    async def _analyze(state: AgentState) -> AgentState:
-        return await analyze_architecture(state, llm)
+    async def _lld(state: AgentState) -> AgentState:
+        return await analyze_lld(state, llm)
 
-    workflow.add_node("analyze_architecture", _analyze)
-    workflow.set_entry_point("analyze_architecture")
-    workflow.add_edge("analyze_architecture", END)
+    async def _hld(state: AgentState) -> AgentState:
+        return await analyze_hld(state, llm)
+
+    async def _erd(state: AgentState) -> AgentState:
+        return await analyze_erd(state, llm)
+
+    workflow.add_node("analyze_lld", _lld)
+    workflow.add_node("analyze_hld", _hld)
+    workflow.add_node("analyze_erd", _erd)
+    workflow.set_entry_point("analyze_lld")
+    workflow.add_edge("analyze_lld", "analyze_hld")
+    workflow.add_edge("analyze_hld", "analyze_erd")
+    workflow.add_edge("analyze_erd", END)
 
     return workflow.compile()
 
@@ -269,31 +499,28 @@ async def run_agent(
     llm_provider: str,
     llm_api_key: str,
 ) -> dict[str, Any]:
-    """
-    End-to-end entry point — call from FastAPI.
-
-    Returns:
-      {
-        "react_flow_nodes": [...],
-        "react_flow_edges": [...],
-        "arch_summary": "...",
-        "error": ""
-      }
-    """
     app = build_agent(llm_provider, llm_api_key)
 
     initial_state: AgentState = {
-        "graph_json":       graph_json,
-        "react_flow_nodes": [],
-        "react_flow_edges": [],
-        "arch_summary":     "",
-        "error":            "",
+        "graph_json":   graph_json,
+        "lld_nodes":    [],
+        "lld_edges":    [],
+        "arch_summary": "",
+        "hld_nodes":    [],
+        "hld_edges":    [],
+        "erd_nodes":    [],
+        "erd_edges":    [],
+        "error":        "",
     }
 
     result = await app.ainvoke(initial_state)
     return {
-        "react_flow_nodes": result.get("react_flow_nodes", []),
-        "react_flow_edges": result.get("react_flow_edges", []),
-        "arch_summary":     result.get("arch_summary", ""),
-        "error":            result.get("error", ""),
+        "lld_nodes":    result.get("lld_nodes", []),
+        "lld_edges":    result.get("lld_edges", []),
+        "hld_nodes":    result.get("hld_nodes", []),
+        "hld_edges":    result.get("hld_edges", []),
+        "erd_nodes":    result.get("erd_nodes", []),
+        "erd_edges":    result.get("erd_edges", []),
+        "arch_summary": result.get("arch_summary", ""),
+        "error":        result.get("error", ""),
     }

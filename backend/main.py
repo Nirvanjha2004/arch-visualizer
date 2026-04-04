@@ -95,9 +95,10 @@ class AnalyzeRequest(BaseModel):
 
 
 class AnalyzeResponse(BaseModel):
-    # React Flow payload — consumed directly by the frontend
-    react_flow_nodes: list
-    react_flow_edges: list
+    # Triple-view React Flow payload (LLD + HLD + ERD)
+    lld: dict           # { "nodes": [...], "edges": [...] }
+    hld: dict           # { "nodes": [...], "edges": [...] }
+    erd: dict           # { "nodes": [...], "edges": [...] }
     arch_summary: str
     graph_stats: dict
     processing_time_seconds: float
@@ -197,8 +198,10 @@ async def analyze_repo(req: AnalyzeRequest):
         "files_analysed": len(file_contents),
         "graph_nodes": graph_json["node_count"],
         "graph_edges": graph_json["edge_count"],
-        "react_flow_nodes": len(agent_result.get("react_flow_nodes", [])),
-        "react_flow_edges": len(agent_result.get("react_flow_edges", [])),
+        "lld_nodes": len(agent_result.get("lld_nodes", [])),
+        "lld_edges": len(agent_result.get("lld_edges", [])),
+        "hld_nodes": len(agent_result.get("hld_nodes", [])),
+        "hld_edges": len(agent_result.get("hld_edges", [])),
         "error": agent_result.get("error"),
         "processing_time_seconds": elapsed,
     }
@@ -209,8 +212,18 @@ async def analyze_repo(req: AnalyzeRequest):
         pass  # Don't fail the request due to logging errors
 
     return AnalyzeResponse(
-        react_flow_nodes=agent_result.get("react_flow_nodes", []),
-        react_flow_edges=agent_result.get("react_flow_edges", []),
+        lld={
+            "nodes": agent_result.get("lld_nodes", []),
+            "edges": agent_result.get("lld_edges", []),
+        },
+        hld={
+            "nodes": agent_result.get("hld_nodes", []),
+            "edges": agent_result.get("hld_edges", []),
+        },
+        erd={
+            "nodes": agent_result.get("erd_nodes", []),
+            "edges": agent_result.get("erd_edges", []),
+        },
         arch_summary=agent_result.get("arch_summary", ""),
         graph_stats={
             "files_analysed": len(file_contents),
