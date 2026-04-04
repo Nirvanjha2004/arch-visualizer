@@ -422,6 +422,17 @@ def _validate_and_fix(parsed: dict, default_type: str | None = None) -> dict:
 
 async def _invoke_with_retry(llm, messages: list, max_retries: int = 4) -> Any:
     """Retry LLM calls on 429 rate limit errors with exponential backoff."""
+    import logging
+    log = logging.getLogger("arch-visualizer")
+
+    for i, msg in enumerate(messages):
+        content = msg.content if hasattr(msg, "content") else str(msg)
+        log.info("LLM_INPUT [msg %d/%d] type=%s length=%d chars:\n%s",
+                 i + 1, len(messages),
+                 type(msg).__name__,
+                 len(content),
+                 content[:3000])   # cap at 3000 chars so logs don't explode
+
     for attempt in range(max_retries):
         try:
             return await llm.ainvoke(messages)
@@ -429,7 +440,7 @@ async def _invoke_with_retry(llm, messages: list, max_retries: int = 4) -> Any:
             err = str(exc)
             is_rate_limit = "429" in err or "TooManyRequests" in err or "rate" in err.lower()
             if is_rate_limit and attempt < max_retries - 1:
-                wait = 2 ** (attempt + 1)   # 2s, 4s, 8s, 16s
+                wait = 2 ** (attempt + 1)
                 await asyncio.sleep(wait)
                 continue
             raise
