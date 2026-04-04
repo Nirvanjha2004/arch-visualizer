@@ -208,10 +208,11 @@ STRICT RULES — only represent infrastructure that is EVIDENCED in the graph:
 Instructions:
 1. Scan all_file_paths for language/framework clues (e.g. .go files → Go, fiber/ → Fiber framework, .rs → Rust).
 2. Scan node imports for external service clues.
-3. Group all business logic into a single backend block — label it with the actual framework if detectable.
-4. Identify separate workers/jobs only if evidenced by filenames like worker.go, job.py, consumer.js etc.
-5. Show 3–6 system blocks max — fewer is better than hallucinating.
-6. Add edge labels (HTTP, SQL, WebSocket, etc.) only where the communication protocol is evidenced.
+3. Check "has_external_apis: true" on any node — that node calls an external HTTP service. Identify WHAT it calls from its filename/imports (e.g. github_service.py → GitHub API, stripe_client.py → Stripe API) and add a corresponding "external_api" node.
+4. Group all business logic into a single backend block — label it with the actual framework if detectable.
+5. Identify separate workers/jobs only if evidenced by filenames like worker.go, job.py, consumer.js etc.
+6. Show 3–7 system blocks max — fewer is better than hallucinating.
+7. Add edge labels (HTTP, SQL, WebSocket, etc.) only where the communication protocol is evidenced.
 """
 
 

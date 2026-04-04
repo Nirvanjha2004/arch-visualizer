@@ -85,29 +85,36 @@ def _resolve_import_to_node(
     if import_str in node_ids:
         return import_str
 
-    # Module name match
+    # Exact module name match
     if import_str in module_to_path:
         return module_to_path[import_str]
 
-    # Partial module match (e.g. "db" matching "src.db")
+    # Dotted import — try progressively shorter prefixes
+    # e.g. "services.github_service" → try "services.github_service", then "services"
+    parts = import_str.split(".")
+    for length in range(len(parts), 0, -1):
+        candidate = ".".join(parts[:length])
+        if candidate in module_to_path:
+            return module_to_path[candidate]
+
+    # Partial module match — import basename matches module basename
+    # e.g. import "github_service" matches module "services.github_service"
+    import_base = parts[-1]
     for mod, p in module_to_path.items():
-        parts = mod.split(".")
-        if parts[-1] == import_str or mod.endswith(f".{import_str}"):
+        mod_base = mod.split(".")[-1]
+        if mod_base == import_base:
             return p
 
     # Relative-style JS import ("./ or ../" stripped), also strip extension
     stripped = import_str.lstrip("./").replace("/", ".")
-    # Try with and without extension
     for candidate in (stripped, os.path.splitext(stripped)[0]):
         if candidate in module_to_path:
             return module_to_path[candidate]
 
-    # Last resort: match on basename only
-    import_base = import_str.split("/")[-1]
-    import_base_no_ext = os.path.splitext(import_base)[0]
+    # Last resort: match on filename basename only
+    import_file_base = os.path.splitext(import_str.split("/")[-1])[0]
     for mod, p in module_to_path.items():
-        mod_base = mod.split(".")[-1]
-        if mod_base == import_base_no_ext:
+        if mod.split(".")[-1] == import_file_base:
             return p
 
     return None
