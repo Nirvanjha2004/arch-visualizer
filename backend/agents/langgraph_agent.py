@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import asyncio
 from typing import Any, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -37,10 +38,10 @@ def _build_llm(provider: str, api_key: str):
     elif provider == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
         return ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash",
+            model="gemini-2.0-flash-lite",
             google_api_key=api_key,
             temperature=0.2,
-            max_output_tokens=4096,
+            max_output_tokens=8192,
         )
     else:
         raise ValueError(f"Unsupported LLM provider: {provider}")
@@ -390,6 +391,23 @@ def _validate_and_fix(parsed: dict, default_type: str | None = None) -> dict:
     return parsed
 
 
+# ── Retry wrapper for rate limits ─────────────────────────────────────────────
+
+async def _invoke_with_retry(llm, messages: list, max_retries: int = 4) -> Any:
+    """Retry LLM calls on 429 rate limit errors with exponential backoff."""
+    for attempt in range(max_retries):
+        try:
+            return await llm.ainvoke(messages)
+        except Exception as exc:
+            err = str(exc)
+            is_rate_limit = "429" in err or "TooManyRequests" in err or "rate" in err.lower()
+            if is_rate_limit and attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)   # 2s, 4s, 8s, 16s
+                await asyncio.sleep(wait)
+                continue
+            raise
+
+
 # ── LLD node ──────────────────────────────────────────────────────────────────
 
 async def analyze_lld(state: AgentState, llm) -> AgentState:
@@ -399,7 +417,7 @@ async def analyze_lld(state: AgentState, llm) -> AgentState:
             SystemMessage(content=LLD_SYSTEM_PROMPT),
             HumanMessage(content=LLD_USER_PROMPT.format(graph_json=compressed)),
         ]
-        response = await llm.ainvoke(messages)
+        response = await _invoke_with_retry(llm, messages)
         parsed = _parse_llm_json(response.content)
         parsed = _validate_and_fix(parsed)
         return {
@@ -422,27 +440,12 @@ async def analyze_lld(state: AgentState, llm) -> AgentState:
 
 async def analyze_hld(state: AgentState, llm) -> AgentState:
     try:
-        compressed = _compress_graph(state["graph_json"], include_file_paths=True)  # full — needs file paths for stack inference
+        compressed = _compress_graph(state["graph_json"], include_file_paths=True)
         messages = [
             SystemMessage(content=HLD_SYSTEM_PROMPT),
             HumanMessage(content=HLD_USER_PROMPT.format(graph_json=compressed)),
         ]
-        response = await llm.ainvoke(messages)
-        parsed = _parse_llm_json(response.content)
-        parsed = _validate_and_fix(parsed, default_type="custom")
-        return {
-            **state,
-            "hld_nodes": parsed.get("nodes", []),
-            "hld_edges": parsed.get("edges", []),
-        }
-    except Exception as exc:
-        return {
-            **state,
-            "hld_nodes": [],
-            "hld_edges": [],
-            "error": state.get("error", "") + f" | HLD analysis failed: {exc}",
-        }
-        response = await llm.ainvoke(messages)
+        response = await _invoke_with_retry(llm, messages)
         parsed = _parse_llm_json(response.content)
         parsed = _validate_and_fix(parsed, default_type="custom")
         return {
@@ -468,7 +471,7 @@ async def analyze_erd(state: AgentState, llm) -> AgentState:
             SystemMessage(content=ERD_SYSTEM_PROMPT),
             HumanMessage(content=ERD_USER_PROMPT.format(graph_json=compressed)),
         ]
-        response = await llm.ainvoke(messages)
+        response = await _invoke_with_retry(llm, messages)
         parsed = _parse_llm_json(response.content)
 
         # LLM signalled no models exist — return empty ERD, not an error
@@ -508,9 +511,11 @@ def build_agent(llm_provider: str, llm_api_key: str):
         return await analyze_lld(state, llm)
 
     async def _hld(state: AgentState) -> AgentState:
+        await asyncio.sleep(4)   # avoid rapid-fire 429s between sequential calls
         return await analyze_hld(state, llm)
 
     async def _erd(state: AgentState) -> AgentState:
+        await asyncio.sleep(4)
         return await analyze_erd(state, llm)
 
     workflow.add_node("analyze_lld", _lld)
