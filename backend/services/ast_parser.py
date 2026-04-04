@@ -142,14 +142,18 @@ def _extract_js_ts(tree_root: Node, source: bytes) -> tuple[list, list, list, li
     for node in _walk(tree_root):
         t = node.type
 
-        # --- ES6 imports ---
+        # --- ES6 imports: import X from 'module' ---
         if t == "import_statement":
-            # "from 'module-name'"
-            src_nodes = [c for c in node.named_children if c.type == "string"]
-            for sn in src_nodes:
-                raw = _node_text(sn, source).strip("'\"")
-                # Keep only relative paths or known package names
+            # tree-sitter stores the module path in the "source" field
+            src_node = node.child_by_field_name("source")
+            if src_node:
+                raw = _node_text(src_node, source).strip("'\"")
                 imports.append(raw)
+            else:
+                # fallback: any string child
+                for c in node.named_children:
+                    if c.type == "string":
+                        imports.append(_node_text(c, source).strip("'\""))
 
         # --- require() calls ---
         elif t == "call_expression":
@@ -157,9 +161,9 @@ def _extract_js_ts(tree_root: Node, source: bytes) -> tuple[list, list, list, li
             if fn_node and _node_text(fn_node, source) == "require":
                 args = node.child_by_field_name("arguments")
                 if args:
-                    str_nodes = [c for c in args.named_children if c.type == "string"]
-                    for sn in str_nodes:
-                        imports.append(_node_text(sn, source).strip("'\""))
+                    for sn in args.named_children:
+                        if sn.type == "string":
+                            imports.append(_node_text(sn, source).strip("'\""))
 
         # --- class declarations ---
         elif t in ("class_declaration", "class"):
@@ -180,11 +184,9 @@ def _extract_js_ts(tree_root: Node, source: bytes) -> tuple[list, list, list, li
             if fn_node:
                 call_text = _node_text(fn_node, source)
                 calls.append(call_text)
-                if any(
-                    pat in call_text
-                    for pat in ("fetch", "axios.", "http.", "https.", "request(",
-                                "got.", "superagent.")
-                ):
+                if any(pat in call_text for pat in (
+                    "fetch", "axios.", "http.", "https.", "request(", "got.", "superagent."
+                )):
                     ext_apis.append(call_text)
 
     return imports, classes, functions, calls, ext_apis
