@@ -77,15 +77,16 @@ produce a React Flow diagram JSON that visually represents the detailed module-l
 ## Node & Layout Rules:
 - Use a maximum of 30 nodes — pick the most architecturally significant files/modules.
 - Group nodes into logical COLUMNS by layer (left-to-right: entry → controllers → services → data):
-    Column 0 (x=50):   Entry points / main files
-    Column 1 (x=300):  Routes / Controllers / Handlers
-    Column 2 (x=550):  Services / Business logic
-    Column 3 (x=800):  Models / Schemas / Repositories
-    Column 4 (x=1050): Database / Cache / External integrations
-    Column 5 (x=1300): Utilities / Config / Shared
+    Column 0 (x=50):   Entry points / main files (e.g. main.py, App.jsx, index.js)
+    Column 1 (x=300):  Routes / Controllers / Handlers / UI Components (e.g. routes.py, UserController, DiagramViewer, AnalyzerForm)
+    Column 2 (x=550):  Services / Business logic (e.g. github_service.py, ast_parser.py, graph_builder.py)
+    Column 3 (x=800):  Models / Schemas / Data classes (e.g. models.py, schema.py, types.ts)
+    Column 4 (x=1050): Database / Cache / External integrations — ONLY if they exist
+    Column 5 (x=1300): Utilities / Config / Shared (e.g. vite.config.js, settings.py, utils.py)
 - Space nodes VERTICALLY: y = row_index * 120 within each column. Start at y=50.
 - Node `id` must be a short, unique snake_case string (e.g., "app_main", "user_controller").
 - Node `label` must be a concise human-readable name (e.g., "App Entry", "User Controller").
+- CRITICAL: Frontend UI components (React components, Vue components) belong in Column 1 (x=300), NOT Column 4.
 
 ## Edge Rules:
 - Only include edges between nodes that ARE in your node list.
@@ -370,6 +371,22 @@ def _validate_and_fix(parsed: dict, default_type: str | None = None) -> dict:
     edges = parsed.get("edges", [])
     valid_ids = {n["id"] for n in nodes if "id" in n}
 
+    # Build a fuzzy lookup: lowercase label/id → actual id
+    # so edges referencing "main" can match node id "app_main"
+    fuzzy: dict[str, str] = {}
+    for n in nodes:
+        nid = n.get("id", "")
+        fuzzy[nid.lower()] = nid
+        label = n.get("data", {}).get("label", "")
+        if label:
+            fuzzy[label.lower()] = nid
+            fuzzy[label.lower().replace(" ", "_")] = nid
+
+    def _resolve(ref: str) -> str | None:
+        if ref in valid_ids:
+            return ref
+        return fuzzy.get(ref.lower()) or fuzzy.get(ref.lower().replace(" ", "_"))
+
     for i, node in enumerate(nodes):
         if "position" not in node:
             node["position"] = {"x": (i % 6) * 250 + 50, "y": (i // 6) * 150 + 100}
@@ -380,10 +397,14 @@ def _validate_and_fix(parsed: dict, default_type: str | None = None) -> dict:
 
     clean_edges = []
     for edge in edges:
-        if edge.get("source") in valid_ids and edge.get("target") in valid_ids:
+        src = _resolve(edge.get("source", ""))
+        tgt = _resolve(edge.get("target", ""))
+        if src and tgt and src != tgt:
+            edge["source"] = src
+            edge["target"] = tgt
             edge["animated"] = True
             if "id" not in edge:
-                edge["id"] = f"e_{edge['source']}_{edge['target']}"
+                edge["id"] = f"e_{src}_{tgt}"
             clean_edges.append(edge)
 
     parsed["nodes"] = nodes
