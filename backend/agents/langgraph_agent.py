@@ -197,8 +197,8 @@ STRICT RULES — only represent infrastructure that is EVIDENCED in the graph:
 - Only include a "cache" node if you see redis, memcached, or similar imports or filenames.
 - Only include a "queue" node if you see kafka, rabbitmq, celery, sqs, or similar imports or filenames.
 - Only include a "cdn" node if you see static file serving or CDN SDK imports.
-- If you see langchain, langchain_groq, langchain_google_genai, openai, anthropic, cohere imports → add an "external_api" node for the LLM provider (e.g. "Groq LLM", "Gemini API").
-- If you see langgraph imports → add a "service" node for the LangGraph Agent.
+- If you see langchain, langchain_groq, langchain_google_genai, openai, anthropic, cohere imports → add an "external_api" node for the LLM provider (e.g. "Groq LLM", "Gemini API") AND add an edge from the LangGraph Agent node to this LLM node.
+- If you see langgraph imports → add a "service" node for the LangGraph Agent AND connect it: backend_server → langgraph_agent → llm_api.
 - Do NOT invent infrastructure components that have no evidence in the graph or file paths.
 - If the backend is stateless (no DB/cache/queue evidence), show only: client → server → external APIs.
 

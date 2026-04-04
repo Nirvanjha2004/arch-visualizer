@@ -95,10 +95,20 @@ def _resolve_import_to_node(
         if parts[-1] == import_str or mod.endswith(f".{import_str}"):
             return p
 
-    # Relative-style JS import ("./ or ../" stripped)
+    # Relative-style JS import ("./ or ../" stripped), also strip extension
     stripped = import_str.lstrip("./").replace("/", ".")
-    if stripped in module_to_path:
-        return module_to_path[stripped]
+    # Try with and without extension
+    for candidate in (stripped, os.path.splitext(stripped)[0]):
+        if candidate in module_to_path:
+            return module_to_path[candidate]
+
+    # Last resort: match on basename only
+    import_base = import_str.split("/")[-1]
+    import_base_no_ext = os.path.splitext(import_base)[0]
+    for mod, p in module_to_path.items():
+        mod_base = mod.split(".")[-1]
+        if mod_base == import_base_no_ext:
+            return p
 
     return None
 
