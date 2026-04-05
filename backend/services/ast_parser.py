@@ -103,7 +103,9 @@ def _extract_python(tree_root: Node, source: bytes) -> tuple[list, list, list, l
         elif t == "import_from_statement":
             mod_children = [c for c in node.named_children if c.type == "dotted_name"]
             if mod_children:
-                imports.append(_node_text(mod_children[0], source).split(".")[0])
+                # Keep full dotted path so graph_builder can resolve to exact file
+                # e.g. "from services.github_service import X" → "services.github_service"
+                imports.append(_node_text(mod_children[0], source))
 
         # --- class definitions ---
         elif t == "class_definition":
