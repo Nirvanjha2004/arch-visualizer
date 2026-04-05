@@ -469,10 +469,11 @@ async def _invoke_with_retry(llm, messages: list, max_retries: int = 4) -> Any:
 
 async def analyze_lld(state: AgentState, llm) -> AgentState:
     try:
-        compressed = _compress_graph(state["graph_json"])  # lean — no file paths
+        compressed = _compress_graph(state["graph_json"])
+        user_content = LLD_USER_PROMPT.replace("{graph_json}", compressed)
         messages = [
             SystemMessage(content=LLD_SYSTEM_PROMPT),
-            HumanMessage(content=LLD_USER_PROMPT.format(graph_json=compressed)),
+            HumanMessage(content=user_content),
         ]
         response = await _invoke_with_retry(llm, messages)
         parsed = _parse_llm_json(response.content)
@@ -498,9 +499,10 @@ async def analyze_lld(state: AgentState, llm) -> AgentState:
 async def analyze_hld(state: AgentState, llm) -> AgentState:
     try:
         compressed = _compress_graph(state["graph_json"], include_file_paths=True)
+        user_content = HLD_USER_PROMPT.replace("{graph_json}", compressed)
         messages = [
             SystemMessage(content=HLD_SYSTEM_PROMPT),
-            HumanMessage(content=HLD_USER_PROMPT.format(graph_json=compressed)),
+            HumanMessage(content=user_content),
         ]
         response = await _invoke_with_retry(llm, messages)
         parsed = _parse_llm_json(response.content)
@@ -523,10 +525,11 @@ async def analyze_hld(state: AgentState, llm) -> AgentState:
 
 async def analyze_erd(state: AgentState, llm) -> AgentState:
     try:
-        compressed = _compress_graph(state["graph_json"])  # lean — no file paths needed
+        compressed = _compress_graph(state["graph_json"])
+        user_content = ERD_USER_PROMPT.replace("{graph_json}", compressed)
         messages = [
             SystemMessage(content=ERD_SYSTEM_PROMPT),
-            HumanMessage(content=ERD_USER_PROMPT.format(graph_json=compressed)),
+            HumanMessage(content=user_content),
         ]
         response = await _invoke_with_retry(llm, messages)
         parsed = _parse_llm_json(response.content)
