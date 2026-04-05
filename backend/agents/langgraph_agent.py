@@ -99,28 +99,34 @@ produce a React Flow diagram JSON that visually represents the detailed module-l
 """
 
 LLD_USER_PROMPT = """Analyse the following dependency graph extracted from a GitHub repository.
-Identify the architectural layers and key dependencies, then produce the React Flow JSON.
+Produce a React Flow diagram showing the detailed module-level architecture.
 
 Graph JSON:
 {graph_json}
 
-STRICT RULES — only represent what actually exists in the graph above:
-- Only create nodes for files/modules that appear in the graph JSON nodes list.
-- Only create edges for import relationships that appear in the graph JSON edges list.
-- Do NOT invent nodes, layers, or connections that are not evidenced in the graph.
-- If a layer (e.g. Database) has no files in the graph, omit that layer entirely.
-- IMPORTANT: Include BOTH frontend AND backend files. Do not only show one side.
-- Pick the most significant files from each part of the codebase — entry points, services, components.
+## How to read this graph:
+- "edges": import relationships between files — use these as your diagram edges
+- "external_api_calls": HTTP calls or route decorators found in the file:
+    - "ROUTE:@app.post(...)" → this file is an API server entry point
+    - "fetch(...)" → this file calls a backend API
+    - "self._client.get(...)" → this file calls an external service
+- "imports": libraries used — tells you what layer this file belongs to
 
-Focus on:
-- Entry points and main application files (leftmost column)
-- API routes / controllers
-- Service / business logic layer
-- Data models and repositories — ONLY if they exist in the graph
-- Database / cache integrations — ONLY if they exist in the graph
-- Utilities and config (rightmost column)
+## Rules:
+- Include ALL nodes from the graph — both frontend AND backend
+- Use the "edges" array to draw connections between nodes
+- For files with "ROUTE:" in external_api_calls → place in Column 0 (entry point)
+- For files with fetch/axios in external_api_calls → they call the backend, show that edge too
+- Backend entry (main.py with @app routes) connects to service files it imports
 
-Assign clear, descriptive labels. Ensure no two nodes share the same x,y position.
+## Layout:
+- Column 0 (x=50):   main.py, main.jsx, index.js — entry points
+- Column 1 (x=300):  React components, API route handlers
+- Column 2 (x=550):  Service files (github_service, ast_parser, graph_builder, langgraph_agent)
+- Column 3 (x=800):  Models/schemas — only if they exist
+- Column 5 (x=1300): Config/utilities (vite.config.js, .env files)
+
+Assign clear labels. No two nodes at same x,y position.
 """
 
 
@@ -196,29 +202,36 @@ HLD_USER_PROMPT = """Analyse this dependency graph and produce a HIGH-LEVEL syst
 Graph JSON:
 {graph_json}
 
-IMPORTANT: The graph JSON contains an "all_file_paths" list — use this to infer the full tech stack
-even if AST parsing only covered some languages (e.g. Go, Rust, Java files won't have parsed imports
-but their filenames reveal the stack).
+## How to read this graph:
+- "imports": what libraries/modules this file uses → tells you the tech stack
+- "external_api_calls": actual HTTP calls or route definitions found in this file:
+    - "fetch(...)" or "axios.(...)" → this file makes HTTP requests to a backend
+    - "ROUTE:@app.post(...)" → this file EXPOSES an HTTP endpoint (it IS the server)
+    - "self._client.get(...)" → this file calls an external HTTP API
+- "has_external_apis": true → this file makes outbound HTTP calls
+- "all_file_paths": every file in the repo — use to infer languages/frameworks not parsed
 
-STRICT RULES — only represent infrastructure that is EVIDENCED in the graph:
-- Only include a "database" node if you see actual DB imports (sqlalchemy, psycopg2, pymongo, prisma, django.db, typeorm, sequelize, etc.) in node imports OR db-related filenames (postgres, mysql, mongo, sqlite, redis) in all_file_paths.
-- Only include a "cache" node if you see redis, memcached, or similar imports or filenames.
-- Only include a "queue" node if you see kafka, rabbitmq, celery, sqs, or similar imports or filenames.
-- Only include a "cdn" node if you see static file serving or CDN SDK imports.
-- If you see httpx, requests, aiohttp imports AND github.com in the node data or filenames → add an "external_api" node for "GitHub API" AND add an edge from the backend server to it.
-- If you see langchain, langchain_groq, langchain_google_genai, openai, anthropic, cohere imports → add an "external_api" node for the LLM provider (e.g. "Groq LLM", "Gemini API") AND add an edge from the LangGraph Agent node to this LLM node.
-- If you see langgraph imports → add a "service" node for the LangGraph Agent AND connect it: backend_server → langgraph_agent → llm_api.
-- Do NOT invent infrastructure components that have no evidence in the graph or file paths.
-- If the backend is stateless (no DB/cache/queue evidence), show only: client → server → external APIs.
+## Rules for building the diagram:
+1. Find the CLIENT: look for files with fetch() or axios calls → that's the frontend calling the backend
+2. Find the SERVER: look for files with ROUTE: decorators (@app.post, @app.get) → that's the API server
+3. Find EXTERNAL APIs: look for files named *github*, *stripe*, *twilio* etc with HTTP calls → external services
+4. Find INTERNAL SERVICES: look for langgraph, celery, worker imports → background services
+5. Find DATA STORES: only if sqlalchemy, prisma, mongoose, redis imports exist
 
-Instructions:
-1. Scan all_file_paths for language/framework clues (e.g. .go files → Go, fiber/ → Fiber framework, .rs → Rust).
-2. Scan node imports for external service clues.
-3. Check "has_external_apis: true" on any node — that node calls an external HTTP service. Identify WHAT it calls from its filename/imports (e.g. github_service.py → GitHub API, stripe_client.py → Stripe API) and add a corresponding "external_api" node.
-4. Group all business logic into a single backend block — label it with the actual framework if detectable.
-5. Identify separate workers/jobs only if evidenced by filenames like worker.go, job.py, consumer.js etc.
-6. Show 3–7 system blocks max — fewer is better than hallucinating.
-7. Add edge labels (HTTP, SQL, WebSocket, etc.) only where the communication protocol is evidenced.
+## Edge rules — BIDIRECTIONAL flows:
+- Every HTTP call has a response. Show BOTH directions:
+  - client → server: label "HTTP POST /api/analyze"  
+  - server → client: label "JSON response"
+- Every external API call has a response:
+  - server → github_api: label "GET /repos/{owner}/{repo}"
+  - github_api → server: label "repo file tree"
+  - langgraph → llm_api: label "prompt + graph JSON"
+  - llm_api → langgraph: label "React Flow JSON"
+
+## Infrastructure rules:
+- NO database node unless sqlalchemy/prisma/mongoose/django.db imports exist
+- NO cache node unless redis/memcached imports exist  
+- NO queue node unless kafka/rabbitmq/celery imports exist
 """
 
 
@@ -321,15 +334,16 @@ class AgentState(TypedDict):
 def _compress_graph(graph_json: dict, include_file_paths: bool = False) -> str:
     def _trim_node(n: dict) -> dict:
         return {
-            "id":                n.get("id"),
-            "label":             n.get("label"),
-            "language":          n.get("language"),
-            "imports":           n.get("imports", [])[:15],
-            "classes":           n.get("classes", [])[:10],
-            "functions":         n.get("functions", [])[:10],
-            "has_external_apis": n.get("has_external_apis", False),
-            "in_degree":         n.get("in_degree", 0),
-            "out_degree":        n.get("out_degree", 0),
+            "id":                  n.get("id"),
+            "label":               n.get("label"),
+            "language":            n.get("language"),
+            "imports":             n.get("imports", [])[:15],
+            "classes":             n.get("classes", [])[:10],
+            "functions":           n.get("functions", [])[:10],
+            "has_external_apis":   n.get("has_external_apis", False),
+            "external_api_calls":  n.get("external_api_calls", [])[:8],  # HTTP calls + routes
+            "in_degree":           n.get("in_degree", 0),
+            "out_degree":          n.get("out_degree", 0),
         }
 
     compressed = {
@@ -348,7 +362,6 @@ def _compress_graph(graph_json: dict, include_file_paths: bool = False) -> str:
         ],
         "edges": graph_json.get("edges", []),
     }
-    # Only HLD needs the full file path list to infer tech stack
     if include_file_paths:
         compressed["all_file_paths"] = graph_json.get("all_file_paths", [])[:80]
 

@@ -158,7 +158,15 @@ def build_graph(file_metadata: list[FileMetadata]) -> dict[str, Any]:
                 imp, node_ids, path_to_module, module_to_path
             )
             if target and target != fm.path:
-                G.add_edge(fm.path, target, relation="imports")
+                # Skip __init__.py as intermediate — connect directly to the package's files
+                if target.endswith("__init__.py"):
+                    pkg_dir = os.path.dirname(target)
+                    for other_fm in file_metadata:
+                        if (os.path.dirname(other_fm.path) == pkg_dir
+                                and not other_fm.path.endswith("__init__.py")):
+                            G.add_edge(fm.path, other_fm.path, relation="imports")
+                else:
+                    G.add_edge(fm.path, target, relation="imports")
 
     # ── Prune: remove isolated nodes ──────────────────────────────────────────
     isolated = list(nx.isolates(G))
