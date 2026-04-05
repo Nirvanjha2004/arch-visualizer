@@ -160,9 +160,10 @@ def build_graph(file_metadata: list[FileMetadata]) -> dict[str, Any]:
             if target and target != fm.path:
                 # Skip __init__.py as intermediate — connect directly to the package's files
                 if target.endswith("__init__.py"):
-                    pkg_dir = os.path.dirname(target)
+                    pkg_dir = target.replace("\\", "/").rsplit("/", 1)[0]
                     for other_fm in file_metadata:
-                        if (os.path.dirname(other_fm.path) == pkg_dir
+                        other_dir = other_fm.path.replace("\\", "/").rsplit("/", 1)[0]
+                        if (other_dir == pkg_dir
                                 and not other_fm.path.endswith("__init__.py")):
                             G.add_edge(fm.path, other_fm.path, relation="imports")
                 else:

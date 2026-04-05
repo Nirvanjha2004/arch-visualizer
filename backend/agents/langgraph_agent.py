@@ -214,24 +214,30 @@ Graph JSON:
 ## Rules for building the diagram:
 1. Find the CLIENT: look for files with fetch() or axios calls → that's the frontend calling the backend
 2. Find the SERVER: look for files with ROUTE: decorators (@app.post, @app.get) → that's the API server
-3. Find EXTERNAL APIs: look for files named *github*, *stripe*, *twilio* etc with HTTP calls → external services
-4. Find INTERNAL SERVICES: look for langgraph, celery, worker imports → background services
-5. Find DATA STORES: only if sqlalchemy, prisma, mongoose, redis imports exist
+3. Find EXTERNAL APIs called by the SERVER: look for files named *github*, *stripe* etc with HTTP calls in the SERVER's package → FastAPI calls these directly
+4. Find INTERNAL SERVICES: look for langgraph imports → LangGraph Agent is called by FastAPI internally
+5. Find LLM APIs: look for langchain_groq, langchain_google_genai, openai imports → LangGraph calls these
+
+## Correct flow for this type of app:
+- React App → [HTTP POST] → FastAPI Server
+- FastAPI Server → [HTTP GET] → GitHub API (to fetch repo files)
+- GitHub API → [repo data] → FastAPI Server  
+- FastAPI Server → [Internal] → LangGraph Agent (to analyse the graph)
+- LangGraph Agent → [HTTP] → LLM API (Groq/Gemini for diagram generation)
+- LLM API → [JSON response] → LangGraph Agent
+- LangGraph Agent → [React Flow JSON] → FastAPI Server
+- FastAPI Server → [JSON response] → React App
 
 ## Edge rules — BIDIRECTIONAL flows:
-- Every HTTP call has a response. Show BOTH directions:
-  - client → server: label "HTTP POST /api/analyze"  
-  - server → client: label "JSON response"
-- Every external API call has a response:
-  - server → github_api: label "GET /repos/{owner}/{repo}"
-  - github_api → server: label "repo file tree"
-  - langgraph → llm_api: label "prompt + graph JSON"
-  - llm_api → langgraph: label "React Flow JSON"
+- Every HTTP call has a response. Show BOTH directions with descriptive labels.
+- CLIENT → SERVER: "HTTP POST /api/analyze" | SERVER → CLIENT: "JSON response"
+- SERVER → GITHUB: "GET /repos/{owner}/{repo}" | GITHUB → SERVER: "repo file tree"  
+- SERVER → LANGGRAPH: "Internal call" | LANGGRAPH → SERVER: "React Flow JSON"
+- LANGGRAPH → LLM: "prompt + graph" | LLM → LANGGRAPH: "diagram JSON"
 
 ## Infrastructure rules:
-- NO database node unless sqlalchemy/prisma/mongoose/django.db imports exist
-- NO cache node unless redis/memcached imports exist  
-- NO queue node unless kafka/rabbitmq/celery imports exist
+- NO database node unless sqlalchemy/prisma/mongoose imports exist
+- NO cache/queue nodes unless redis/kafka imports exist
 """
 
 
