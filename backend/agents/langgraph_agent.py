@@ -179,6 +179,12 @@ showing the major infrastructure components and how they interact.
 - Space nodes vertically: y = row_index * 180, start at y=100.
 - Make labels concise and infrastructure-level (e.g., "FastAPI Server", "PostgreSQL", "React App").
 
+## Edge Rules:
+- Show data flow in BOTH directions for request-response patterns.
+- Use a single edge with label "HTTP req/res" for synchronous REST calls (request + response combined).
+- Every call to an external API (GitHub API, LLM API) MUST have a corresponding response edge back.
+- Use label "Internal" for in-process calls between services.
+
 ## CRITICAL:
 - Return ONLY the raw JSON object — no explanation, no code fences, no extra text.
 - Every node id referenced in edges MUST exist in the nodes array.

@@ -231,6 +231,7 @@ def build_graph(file_metadata: list[FileMetadata]) -> dict[str, Any]:
                 "classes": attrs.get("classes", [])[:10],
                 "functions": attrs.get("functions", [])[:10],
                 "has_external_apis": attrs.get("has_external_apis", False),
+                "external_api_calls": attrs.get("external_apis", [])[:10],
                 "in_degree": in_degrees.get(n_id, 0),
                 "out_degree": out_degrees.get(n_id, 0),
             }

@@ -133,6 +133,12 @@ def _extract_python(tree_root: Node, source: bytes) -> tuple[list, list, list, l
                 ):
                     ext_apis.append(call_text)
 
+        # --- decorators: extract HTTP route info (@app.get, @app.post etc.) ---
+        elif t == "decorator":
+            dec_text = _node_text(node, source)
+            if any(m in dec_text for m in (".get(", ".post(", ".put(", ".delete(", ".patch(")):
+                ext_apis.append(f"ROUTE:{dec_text.strip()}")
+
     return imports, classes, functions, calls, ext_apis
 
 
@@ -187,7 +193,16 @@ def _extract_js_ts(tree_root: Node, source: bytes) -> tuple[list, list, list, li
                 if any(pat in call_text for pat in (
                     "fetch", "axios.", "http.", "https.", "request(", "got.", "superagent."
                 )):
-                    ext_apis.append(call_text)
+                    # Try to grab the URL argument too
+                    args = node.child_by_field_name("arguments")
+                    url_hint = ""
+                    if args:
+                        for c in args.named_children:
+                            txt = _node_text(c, source)
+                            if "/api/" in txt or "http" in txt or "${" in txt:
+                                url_hint = txt[:80]
+                                break
+                    ext_apis.append(f"{call_text}({url_hint})" if url_hint else call_text)
 
     return imports, classes, functions, calls, ext_apis
 
